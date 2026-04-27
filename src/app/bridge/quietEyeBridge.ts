@@ -20,7 +20,7 @@ import type {
 const LOG_PREFIX = '[QuietEyeBridge]';
 const MAX_BUFFER_SAMPLES = 6000; // ~4 minutes at 25Hz
 const HEALTH_CHECK_INTERVAL_MS = 10_000;
-const SERVICE_TIMEOUT_MS = 5_000;
+const SERVICE_TIMEOUT_MS = 30_000; // LLM coaching calls take 15-25s
 
 // ─── Circular Buffer ─────────────────────────────────────────────────────────
 
