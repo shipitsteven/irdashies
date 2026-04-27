@@ -3,6 +3,7 @@ import log from './app/logger';
 import {
   iRacingSDKSetup,
   getCurrentBridge,
+  onBridgeChanged,
 } from './app/bridge/iracingSdk/setup';
 import { getOrCreateDefaultDashboard } from './app/storage/dashboards';
 import { setupTaskbar, KeybindingManager } from './app';
@@ -24,6 +25,7 @@ import { Analytics } from './app/analytics';
 import { setupReferenceLapsBridge } from './app/bridge/referenceLapsBridge';
 import { setupKeybindingsBridge } from './app/bridge/keybindingsBridge';
 import { setupLogBridge } from './app/bridge/logBridge';
+import { setupQuietEyeBridge } from './app/bridge/quietEyeBridge';
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (started) app.quit();
@@ -69,6 +71,31 @@ app.on('ready', async () => {
   setupTaskbar(overlayManager, keybindingManager);
   publishDashboardUpdates(overlayManager, analytics);
   setupKeybindingsBridge(keybindingManager);
+
+  // Quiet Eye coaching bridge — non-critical, guarded
+  try {
+    if (bridge) {
+      await setupQuietEyeBridge(overlayManager, bridge, {
+        enabled: true,
+        serviceUrl: 'http://localhost:8878',
+        enableSectionFeedback: true,
+      });
+    }
+    // Re-wire when bridge changes (e.g. demo mode toggle)
+    onBridgeChanged(async (newBridge) => {
+      try {
+        await setupQuietEyeBridge(overlayManager, newBridge, {
+          enabled: true,
+          serviceUrl: 'http://localhost:8878',
+          enableSectionFeedback: true,
+        });
+      } catch (err) {
+        log.warn('Quiet Eye bridge re-init failed (non-fatal)', err);
+      }
+    });
+  } catch (err) {
+    log.warn('Quiet Eye bridge init failed (non-fatal)', err);
+  }
 
   await analytics.init(overlayManager.getVersion(), dashboard);
 

@@ -1150,6 +1150,42 @@ export const defaultDashboard: {
         },
       },
     },
+    {
+      id: 'coaching',
+      enabled: false,
+      layout: {
+        x: 50,
+        y: 600,
+        width: 400,
+        height: 200,
+      },
+      config: {
+        showRadioMessage: true,
+        radioFadeDuration: 10,
+        showActionItems: true,
+        maxActionItems: 5,
+        showStatusIndicator: true,
+        fontSize: 14,
+        opacity: 0.9,
+      },
+    },
+    {
+      id: 'cornername',
+      enabled: false,
+      layout: {
+        x: 50,
+        y: 50,
+        width: 350,
+        height: 80,
+      },
+      config: {
+        showSubtitle: true,
+        showCornerNumber: true,
+        showProgressBar: true,
+        fontSize: 18,
+        opacity: 0.9,
+      },
+    },
   ],
   generalSettings: {
     fontType: 'lato',

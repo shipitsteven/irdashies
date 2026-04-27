@@ -60,6 +60,18 @@ const widgetItems: MenuItem[] = [
     widgetType: 'blindspotmonitor',
   },
   {
+    to: '/settings/coaching',
+    path: '/coaching',
+    label: 'Coaching (Quiet Eye)',
+    widgetType: 'coaching',
+  },
+  {
+    to: '/settings/cornername',
+    path: '/cornername',
+    label: 'Corner Name',
+    widgetType: 'cornername',
+  },
+  {
     to: '/settings/fastercarsfrombehind',
     path: '/fastercarsfrombehind',
     label: 'Faster Cars Behind',

@@ -14,6 +14,9 @@ import type {
   ReferenceLapBridge,
   KeybindingsBridge,
   KeybindingActionId,
+  CoachingResponse,
+  SectionFeedback,
+  TrackSection,
 } from '@irdashies/types';
 
 export function exposeBridge() {
@@ -248,4 +251,36 @@ export function exposeBridge() {
     startRecording: () => ipcRenderer.invoke('keybindings:startRecording'),
     stopRecording: () => ipcRenderer.invoke('keybindings:stopRecording'),
   } as KeybindingsBridge);
+
+  // Quiet Eye coaching bridge
+  contextBridge.exposeInMainWorld('coachingBridge', {
+    onCoachingResponse: (callback: (data: CoachingResponse) => void) => {
+      const handler = (_: Electron.IpcRendererEvent, data: CoachingResponse) => {
+        callback(data);
+      };
+      ipcRenderer.on('quietEye:coaching', handler);
+      return () => ipcRenderer.removeListener('quietEye:coaching', handler);
+    },
+    onSectionFeedback: (callback: (data: SectionFeedback) => void) => {
+      const handler = (_: Electron.IpcRendererEvent, data: SectionFeedback) => {
+        callback(data);
+      };
+      ipcRenderer.on('quietEye:sectionFeedback', handler);
+      return () => ipcRenderer.removeListener('quietEye:sectionFeedback', handler);
+    },
+    onCoachingStatus: (callback: (data: { connected: boolean; processing: boolean }) => void) => {
+      const handler = (_: Electron.IpcRendererEvent, data: { connected: boolean; processing: boolean }) => {
+        callback(data);
+      };
+      ipcRenderer.on('quietEye:serviceStatus', handler);
+      return () => ipcRenderer.removeListener('quietEye:serviceStatus', handler);
+    },
+    onTrackSections: (callback: (data: TrackSection[]) => void) => {
+      const handler = (_: Electron.IpcRendererEvent, data: TrackSection[]) => {
+        callback(data);
+      };
+      ipcRenderer.on('quietEye:trackSections', handler);
+      return () => ipcRenderer.removeListener('quietEye:trackSections', handler);
+    },
+  });
 }

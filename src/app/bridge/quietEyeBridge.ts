@@ -267,9 +267,24 @@ export async function setupQuietEyeBridge(
       logger.warn(`${LOG_PREFIX} Service unavailable`);
     }
 
+    // Publish service status to renderer
+    overlayManager.publishMessage('quietEye:serviceStatus', {
+      connected: serviceAvailable,
+      processing: false,
+    });
+
     // Load section boundaries if available
     if (serviceAvailable && status?.sections) {
       sectionBoundaries = status.sections;
+
+      // Convert to TrackSection format for the corner name overlay
+      const trackSections = sectionBoundaries.map((b) => ({
+        section_id: b.section_id,
+        name: b.section_id.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+        start_pct: b.start_pct,
+        end_pct: b.end_pct,
+      }));
+      overlayManager.publishMessage('quietEye:trackSections', trackSections);
     }
   }
 
