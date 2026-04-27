@@ -342,8 +342,20 @@ export async function setupQuietEyeBridge(
 
   // ─── Session Data Handler ────────────────────────────────────────────────
 
+    let resolvedTrackIdCache: string | null = null;
+  let lastWeekendInfoKey = '';
+
   async function handleSessionData(session: Session): Promise<void> {
-    const newTrackId = await resolveTrackIdViaService(session, serviceUrl);
+    // Only re-resolve track ID when WeekendInfo actually changes
+    const weekendKey = `${session.WeekendInfo.TrackID}-${session.WeekendInfo.SubSessionID || session.WeekendInfo.SessionID}`;
+    let newTrackId: string;
+    if (weekendKey !== lastWeekendInfoKey) {
+      lastWeekendInfoKey = weekendKey;
+      newTrackId = await resolveTrackIdViaService(session, serviceUrl);
+      resolvedTrackIdCache = newTrackId;
+    } else {
+      newTrackId = resolvedTrackIdCache || resolveTrackId(session);
+    }
     const newSessionId = `${session.WeekendInfo.SubSessionID || session.WeekendInfo.SessionID}`;
 
     if (newSessionId !== currentSessionId || newTrackId !== currentTrackId) {
