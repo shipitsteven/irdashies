@@ -483,6 +483,22 @@ export async function setupQuietEyeBridge(
     }
 
     // Track pit road state
+    if (wasOnPitRoad && !onPitRoad && currentTrackId) {
+      // Pit exit detected — trigger outlap briefing
+      logger.info(`${LOG_PREFIX} Pit exit detected — sending outlap event`);
+      const outlapEvent: LapEvent = {
+        track_id: currentTrackId,
+        session_id: currentSessionId,
+        lap_number: lapNumber,
+        lap_time: 0,
+        lap_type: 'out_lap',
+        delta_best: 0,
+        delta_prev: 0,
+        incidents: 0,
+        session_type: currentSessionType,
+      };
+      sendLapEvent(outlapEvent, []);
+    }
     wasOnPitRoad = onPitRoad;
     lastIncidents = incidents;
 
