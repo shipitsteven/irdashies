@@ -185,6 +185,51 @@ function resolveTrackId(session: Session): string {
   return cfg ? `${base}_${cfg}` : base;
 }
 
+/**
+ * Resolve track ID via the Quiet Eye service, falling back to local normalization.
+ * The service uses track_id_map.json which maps iRacing integer TrackID to our filesystem convention.
+ */
+async function resolveTrackIdViaService(
+  session: Session,
+  serviceUrl: string
+): Promise<string> {
+  const info = session.WeekendInfo;
+  const iracingTrackId = info.TrackID;
+
+  if (iracingTrackId && iracingTrackId > 0) {
+    try {
+      const response = await httpGet(`${serviceUrl}/api/resolve-track/${iracingTrackId}`);
+      if (response && response.track_id) {
+        logger.info(`[QuietEyeBridge] Resolved TrackID ${iracingTrackId} -> ${response.track_id}`);
+        return response.track_id;
+      }
+    } catch {
+      // Fall through to local resolution
+    }
+  }
+
+  // Fallback: local normalization
+  return resolveTrackId(session);
+}
+
+function httpGet(url: string): Promise<Record<string, unknown> | null> {
+  return new Promise((resolve) => {
+    const req = http.get(url, { timeout: 3000 }, (res) => {
+      let data = '';
+      res.on('data', (chunk: Buffer) => (data += chunk.toString()));
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(data));
+        } catch {
+          resolve(null);
+        }
+      });
+    });
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+  });
+}
+
 // ─── Session Type Mapping ────────────────────────────────────────────────────
 
 function resolveSessionType(session: Session): SessionType {
@@ -297,8 +342,8 @@ export async function setupQuietEyeBridge(
 
   // ─── Session Data Handler ────────────────────────────────────────────────
 
-  function handleSessionData(session: Session): void {
-    const newTrackId = resolveTrackId(session);
+  async function handleSessionData(session: Session): Promise<void> {
+    const newTrackId = await resolveTrackIdViaService(session, serviceUrl);
     const newSessionId = `${session.WeekendInfo.SubSessionID || session.WeekendInfo.SessionID}`;
 
     if (newSessionId !== currentSessionId || newTrackId !== currentTrackId) {
