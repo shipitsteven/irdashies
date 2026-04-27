@@ -1,101 +1,29 @@
 import http from 'node:http';
-import type { IrSdkBridge, Session, Telemetry } from '@irdashies/types';
+import type { Session } from '@irdashies/types';
 import { OverlayManager } from '../overlayManager';
 import logger from '../logger';
+import type {
+  TelemetryEventEmitter,
+  LapCompleteEvent,
+  PitExitEvent,
+  SectionCrossingEvent,
+  SessionChangeEvent,
+} from './telemetryEvents';
 import type {
   QuietEyeConfig,
   QuietEyeBridge,
   LapEvent,
-  LapType,
-  SessionType,
   CoachingResponse,
   SectionEvent,
   SectionFeedback,
-  SectionBoundary,
   ServiceStatus,
 } from './quietEyeBridge.types';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const LOG_PREFIX = '[QuietEyeBridge]';
-const MAX_BUFFER_SAMPLES = 6000; // ~4 minutes at 25Hz
 const HEALTH_CHECK_INTERVAL_MS = 10_000;
 const SERVICE_TIMEOUT_MS = 30_000; // LLM coaching calls take 15-25s
-
-// ─── Circular Buffer ─────────────────────────────────────────────────────────
-
-interface TelemetrySample {
-  speed: number;
-  brake: number;
-  throttle: number;
-  steering: number;
-  lapDistPct: number;
-  gear: number;
-  absActive: boolean;
-}
-
-class CircularTelemetryBuffer {
-  private buffer: TelemetrySample[];
-  private writeIndex = 0;
-  private count = 0;
-
-  constructor(private readonly capacity: number) {
-    this.buffer = new Array(capacity);
-  }
-
-  push(sample: TelemetrySample): void {
-    this.buffer[this.writeIndex] = sample;
-    this.writeIndex = (this.writeIndex + 1) % this.capacity;
-    if (this.count < this.capacity) this.count++;
-  }
-
-  /**
-   * Snapshot buffer contents in insertion order, then clear.
-   */
-  drain(): TelemetrySample[] {
-    if (this.count === 0) return [];
-
-    const result: TelemetrySample[] = new Array(this.count);
-    const start =
-      this.count < this.capacity
-        ? 0
-        : this.writeIndex; // oldest item index
-
-    for (let i = 0; i < this.count; i++) {
-      result[i] = this.buffer[(start + i) % this.capacity];
-    }
-
-    this.clear();
-    return result;
-  }
-
-  /**
-   * Extract a slice where lapDistPct is between [startPct, endPct).
-   * Does NOT drain — caller reads from live buffer.
-   */
-  sliceByDistPct(startPct: number, endPct: number): TelemetrySample[] {
-    const result: TelemetrySample[] = [];
-    const readStart =
-      this.count < this.capacity ? 0 : this.writeIndex;
-
-    for (let i = 0; i < this.count; i++) {
-      const sample = this.buffer[(readStart + i) % this.capacity];
-      if (sample.lapDistPct >= startPct && sample.lapDistPct < endPct) {
-        result.push(sample);
-      }
-    }
-    return result;
-  }
-
-  clear(): void {
-    this.writeIndex = 0;
-    this.count = 0;
-  }
-
-  get size(): number {
-    return this.count;
-  }
-}
 
 // ─── HTTP Helpers (Node built-in) ────────────────────────────────────────────
 
@@ -165,52 +93,7 @@ async function getJson<T>(url: string): Promise<T | null> {
   }
 }
 
-// ─── Track ID Resolution ─────────────────────────────────────────────────────
-
-function resolveTrackId(session: Session): string {
-  const info = session.WeekendInfo;
-  const name = info.TrackName ?? '';
-  const config = info.TrackConfigName ?? '';
-
-  // Normalize: lowercase, replace spaces/dashes with underscore, strip non-alnum
-  const normalize = (s: string) =>
-    s
-      .toLowerCase()
-      .replace(/[\s-]+/g, '_')
-      .replace(/[^a-z0-9_]/g, '');
-
-  const base = normalize(name);
-  const cfg = normalize(config);
-
-  return cfg ? `${base}_${cfg}` : base;
-}
-
-/**
- * Resolve track ID via the Quiet Eye service, falling back to local normalization.
- * The service uses track_id_map.json which maps iRacing integer TrackID to our filesystem convention.
- */
-async function resolveTrackIdViaService(
-  session: Session,
-  serviceUrl: string
-): Promise<string> {
-  const info = session.WeekendInfo;
-  const iracingTrackId = info.TrackID;
-
-  if (iracingTrackId && iracingTrackId > 0) {
-    try {
-      const response = await httpGet(`${serviceUrl}/api/resolve-track/${iracingTrackId}`);
-      if (response && response.track_id) {
-        logger.info(`[QuietEyeBridge] Resolved TrackID ${iracingTrackId} -> ${response.track_id}`);
-        return response.track_id;
-      }
-    } catch {
-      // Fall through to local resolution
-    }
-  }
-
-  // Fallback: local normalization
-  return resolveTrackId(session);
-}
+// ─── Track ID Resolution via Service ─────────────────────────────────────────
 
 function httpGet(url: string): Promise<Record<string, unknown> | null> {
   return new Promise((resolve) => {
@@ -230,48 +113,43 @@ function httpGet(url: string): Promise<Record<string, unknown> | null> {
   });
 }
 
-// ─── Session Type Mapping ────────────────────────────────────────────────────
+/**
+ * Resolve track ID via the Quiet Eye service, falling back to local normalization.
+ */
+export async function resolveTrackIdViaService(
+  session: Session,
+  serviceUrl: string
+): Promise<string> {
+  const info = session.WeekendInfo;
+  const iracingTrackId = info.TrackID;
 
-function resolveSessionType(session: Session): SessionType {
-  const sessions = session.SessionInfo?.Sessions ?? [];
-  // Find the active session (last one, or use SessionNum from telemetry)
-  for (const s of sessions) {
-    const t = s.SessionType?.toLowerCase() ?? '';
-    if (t.includes('race')) return 'Race';
-    if (t.includes('qual')) return 'Qualifying';
+  if (iracingTrackId && iracingTrackId > 0) {
+    try {
+      const response = await httpGet(`${serviceUrl}/api/resolve-track/${iracingTrackId}`);
+      if (response && response.track_id) {
+        logger.info(`${LOG_PREFIX} Resolved TrackID ${iracingTrackId} -> ${response.track_id}`);
+        return response.track_id as string;
+      }
+    } catch {
+      // Fall through to local resolution
+    }
   }
-  return 'Practice';
-}
 
-function resolveSessionTypeFromNum(session: Session, sessionNum: number): SessionType {
-  const sessions = session.SessionInfo?.Sessions ?? [];
-  const active = sessions[sessionNum];
-  if (active) {
-    const t = active.SessionType?.toLowerCase() ?? '';
-    if (t.includes('race')) return 'Race';
-    if (t.includes('qual')) return 'Qualifying';
-  }
-  return 'Practice';
-}
-
-// ─── Lap Type Classification ─────────────────────────────────────────────────
-
-function classifyLap(
-  onPitRoad: boolean,
-  wasOnPitRoad: boolean,
-  lapTime: number
-): LapType {
-  if (lapTime <= 0) return 'invalid';
-  if (wasOnPitRoad) return 'out_lap';
-  if (onPitRoad) return 'in_lap';
-  return 'flying';
+  // Fallback: local normalization
+  const name = info.TrackName ?? '';
+  const config = info.TrackConfigName ?? '';
+  const normalize = (s: string) =>
+    s.toLowerCase().replace(/[\s-]+/g, '_').replace(/[^a-z0-9_]/g, '');
+  const base = normalize(name);
+  const cfg = normalize(config);
+  return cfg ? `${base}_${cfg}` : base;
 }
 
 // ─── Main Setup ──────────────────────────────────────────────────────────────
 
 export async function setupQuietEyeBridge(
   overlayManager: OverlayManager,
-  irsdkBridge: IrSdkBridge,
+  telemetryEvents: TelemetryEventEmitter,
   config: QuietEyeConfig
 ): Promise<QuietEyeBridge> {
   const serviceUrl = config.serviceUrl || 'http://localhost:8878';
@@ -279,20 +157,7 @@ export async function setupQuietEyeBridge(
   logger.info(`${LOG_PREFIX} Initializing (service: ${serviceUrl}, sections: ${config.enableSectionFeedback})`);
 
   // State
-  const telemetryBuffer = new CircularTelemetryBuffer(MAX_BUFFER_SAMPLES);
-  let currentSession: Session | null = null;
-  let currentTrackId = '';
-  let currentSessionId = '';
-  let currentSessionType: SessionType = 'Practice';
-  let currentLapNumber = -1;
-  let previousLapTime = 0;
-  let bestLapTime = Infinity;
-  let lastIncidents = 0;
-  let lapStartIncidents = 0;
-  let wasOnPitRoad = false;
   let serviceAvailable = false;
-  let sectionBoundaries: SectionBoundary[] = [];
-  let lastSectionIndex = -1;
   let stopped = false;
 
   // Callbacks
@@ -320,12 +185,12 @@ export async function setupQuietEyeBridge(
 
     // Load section boundaries if available
     if (serviceAvailable && status?.sections) {
-      sectionBoundaries = status.sections;
+      telemetryEvents.setSectionBoundaries(status.sections);
 
       // Convert to TrackSection format for the corner name overlay
-      const trackSections = sectionBoundaries.map((b) => ({
+      const trackSections = status.sections.map((b) => ({
         section_id: b.section_id,
-        name: b.section_id.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+        name: b.section_id.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()),
         start_pct: b.start_pct,
         end_pct: b.end_pct,
       }));
@@ -340,190 +205,42 @@ export async function setupQuietEyeBridge(
   // Initial check
   await checkService();
 
-  // ─── Session Data Handler ────────────────────────────────────────────────
+  // ─── Event Handlers ──────────────────────────────────────────────────────
 
-    let resolvedTrackIdCache: string | null = null;
-  let lastWeekendInfoKey = '';
-
-  async function handleSessionData(session: Session): Promise<void> {
-    // Only re-resolve track ID when WeekendInfo actually changes
-    const weekendKey = `${session.WeekendInfo.TrackID}-${session.WeekendInfo.SubSessionID || session.WeekendInfo.SessionID}`;
-    let newTrackId: string;
-    if (weekendKey !== lastWeekendInfoKey) {
-      lastWeekendInfoKey = weekendKey;
-      newTrackId = await resolveTrackIdViaService(session, serviceUrl);
-      resolvedTrackIdCache = newTrackId;
-    } else {
-      newTrackId = resolvedTrackIdCache || resolveTrackId(session);
-    }
-    const newSessionId = `${session.WeekendInfo.SubSessionID || session.WeekendInfo.SessionID}`;
-
-    if (newSessionId !== currentSessionId || newTrackId !== currentTrackId) {
-      logger.info(`${LOG_PREFIX} Session change: track=${newTrackId} session=${newSessionId}`);
-      currentTrackId = newTrackId;
-      currentSessionId = newSessionId;
-      currentLapNumber = -1;
-      previousLapTime = 0;
-      bestLapTime = Infinity;
-      lastIncidents = 0;
-      lapStartIncidents = 0;
-      telemetryBuffer.clear();
-      sectionBoundaries = [];
-      lastSectionIndex = -1;
-
-      // Re-fetch section boundaries for the new track
-      checkService();
-    }
-
-    currentSession = session;
-    currentSessionType = resolveSessionType(session);
-  }
-
-  // ─── Telemetry Handler ───────────────────────────────────────────────────
-
-  async function handleTelemetry(telemetry: Telemetry): Promise<void> {
+  const unsubLap = telemetryEvents.onLapComplete(async (event: LapCompleteEvent) => {
     if (!serviceAvailable) return;
 
-    // Extract player values (index 0 for arrays, raw for scalars)
-    const speed = telemetry.Speed?.value?.[0] ?? 0;
-    const brake = telemetry.Brake?.value?.[0] ?? 0;
-    const throttle = telemetry.Throttle?.value?.[0] ?? 0;
-    const steering = telemetry.SteeringWheelAngle?.value?.[0] ?? 0;
-    const lapDistPct = telemetry.CarIdxLapDistPct?.value?.[0] ?? 0;
-    const gear = telemetry.Gear?.value?.[0] ?? 0;
-    const absActive = telemetry.BrakeABSactive?.value?.[0] ?? false;
-    const lapNumber = telemetry.Lap?.value?.[0] ?? 0;
-    const lapTime = telemetry.LapCurrentLapTime?.value?.[0] ?? 0;
-    const lastLapTime = telemetry.LapLastLapTime?.value?.[0] ?? 0;
-    const onPitRoad = telemetry.OnPitRoad?.value?.[0] ?? false;
-    const incidents = telemetry.PlayerCarMyIncidentCount?.value?.[0] ?? 0;
-    const sessionNum = telemetry.SessionNum?.value?.[0] ?? 0;
-
-    // Resolve session type from active session number
-    if (currentSession) {
-      currentSessionType = resolveSessionTypeFromNum(currentSession, sessionNum);
-    }
-
-    // Buffer telemetry sample
-    telemetryBuffer.push({
-      speed,
-      brake,
-      throttle,
-      steering,
-      lapDistPct,
-      gear,
-      absActive,
-    });
-
-    // ─── Lap Completion Detection ──────────────────────────────────────────
-
-    if (lapNumber > 0 && lapNumber !== currentLapNumber && currentLapNumber > 0) {
-      // Lap completed — the buffer contains the completed lap data
-      const completedLapNumber = currentLapNumber;
-      const completedLapTime = lastLapTime;
-
-      // Calculate deltas
-      const deltaBest = bestLapTime === Infinity ? 0 : completedLapTime - bestLapTime;
-      const deltaPrev = previousLapTime > 0 ? completedLapTime - previousLapTime : 0;
-
-      // Update best
-      if (completedLapTime > 0 && completedLapTime < bestLapTime) {
-        bestLapTime = completedLapTime;
-      }
-
-      // Incident delta for this lap
-      const lapIncidents = incidents - lapStartIncidents;
-
-      // Classify lap type
-      const lapType = classifyLap(onPitRoad, wasOnPitRoad, completedLapTime);
-
-      // Drain buffer — this IS the completed lap's telemetry
-      const samples = telemetryBuffer.drain();
-
-      // Build conditions from live telemetry
-      const conditions = currentSession
+    // Map to LapEvent schema for the service
+    const lapEvent: LapEvent = {
+      track_id: event.trackId,
+      session_id: event.sessionId,
+      lap_number: event.lapNumber,
+      lap_time: event.lapTime,
+      lap_type: event.lapType,
+      delta_best: event.deltaBest,
+      delta_prev: event.deltaPrev,
+      incidents: event.incidents,
+      session_type: event.sessionType,
+      conditions: event.conditions
         ? {
-            track_temp: telemetry.TrackTemp?.value?.[0] ?? 0,
-            track_wetness: telemetry.TrackWetness?.value?.[0] ?? 0,
-            air_temp: telemetry.AirTemp?.value?.[0] ?? 0,
-            precipitation: telemetry.Precipitation?.value?.[0] ?? 0,
+            track_temp: event.conditions.trackTemp,
+            track_wetness: event.conditions.trackWetness,
+            air_temp: event.conditions.airTemp,
+            precipitation: event.conditions.precipitation,
           }
-        : undefined;
+        : undefined,
+    };
 
-      // Build LapEvent
-      const lapEvent: LapEvent = {
-        track_id: currentTrackId,
-        session_id: currentSessionId,
-        lap_number: completedLapNumber,
-        lap_time: completedLapTime,
-        lap_type: lapType,
-        delta_best: deltaBest,
-        delta_prev: deltaPrev,
-        incidents: lapIncidents,
-        session_type: currentSessionType,
-        conditions,
-      };
-
-      // Update state for next lap
-      previousLapTime = completedLapTime;
-      lapStartIncidents = incidents;
-
-      // Send to service (fire and forget, don't block telemetry loop)
-      sendLapEvent(lapEvent, samples);
-    }
-
-    // Track lap number transitions
-    if (lapNumber > 0 && currentLapNumber !== lapNumber) {
-      if (currentLapNumber === -1) {
-        // First telemetry frame — initialize
-        lapStartIncidents = incidents;
-      }
-      currentLapNumber = lapNumber;
-      lastSectionIndex = -1; // Reset section tracking for new lap
-    }
-
-    // Track pit road state
-    if (wasOnPitRoad && !onPitRoad && currentTrackId) {
-      // Pit exit detected — trigger outlap briefing
-      logger.info(`${LOG_PREFIX} Pit exit detected — sending outlap event`);
-      const outlapEvent: LapEvent = {
-        track_id: currentTrackId,
-        session_id: currentSessionId,
-        lap_number: lapNumber,
-        lap_time: 0,
-        lap_type: 'out_lap',
-        delta_best: 0,
-        delta_prev: 0,
-        incidents: 0,
-        session_type: currentSessionType,
-      };
-      sendLapEvent(outlapEvent, []);
-    }
-    wasOnPitRoad = onPitRoad;
-    lastIncidents = incidents;
-
-    // ─── Section Boundary Detection ────────────────────────────────────────
-
-    if (config.enableSectionFeedback && sectionBoundaries.length > 0) {
-      checkSectionBoundary(lapDistPct, lapNumber);
-    }
-  }
-
-  // ─── Send Lap Event ──────────────────────────────────────────────────────
-
-  // Track last error for UI surfacing
-  let lastServiceError = '';
-
-  async function sendLapEvent(event: LapEvent, samples: TelemetrySample[]): Promise<void> {
     logger.info(
-      `${LOG_PREFIX} Lap ${event.lap_number} complete: ${event.lap_time.toFixed(3)}s ` +
-      `(type=${event.lap_type}, delta_best=${event.delta_best.toFixed(3)}s)`
+      `${LOG_PREFIX} Lap ${event.lapNumber} complete: ${event.lapTime.toFixed(3)}s ` +
+      `(type=${event.lapType}, delta_best=${event.deltaBest.toFixed(3)}s)`
     );
 
+    // Send to service
     let response: CoachingResponse | null = null;
     let errorDetail = '';
     try {
-      const res = await httpRequest(`${serviceUrl}/api/lap`, 'POST', JSON.stringify(event));
+      const res = await httpRequest(`${serviceUrl}/api/lap`, 'POST', JSON.stringify(lapEvent));
       if (res.status >= 200 && res.status < 300) {
         response = JSON.parse(res.body) as CoachingResponse;
       } else {
@@ -537,125 +254,124 @@ export async function setupQuietEyeBridge(
       logger.info(
         `${LOG_PREFIX} Coaching: "${response.radio_message.slice(0, 60)}..." (behavior=${response.behavior})`
       );
-
-      // Publish to overlays
       overlayManager.publishMessage('quietEye:coaching', response);
-
-      // Notify registered callbacks
       coachingCallbacks.forEach((cb) => cb(response));
     } else {
       const errorMsg = errorDetail || 'No response from service';
       const errorResponse: CoachingResponse = {
-        lap_number: event.lap_number,
+        lap_number: event.lapNumber,
         radio_message: `⚠️ Coaching error: ${errorMsg}`,
-        coaching_lines: [
-          { text: errorMsg, priority: 0 },
-        ],
+        coaching_lines: [{ text: errorMsg, priority: 0 }],
         behavior: 'error',
       };
       overlayManager.publishMessage('quietEye:coaching', errorResponse);
-      logger.warn(`${LOG_PREFIX} Lap ${event.lap_number} error: ${errorMsg}`);
+      logger.warn(`${LOG_PREFIX} Lap ${event.lapNumber} error: ${errorMsg}`);
     }
-  }
+  });
 
-  // ─── Section Boundary Check ──────────────────────────────────────────────
+  const unsubPitExit = telemetryEvents.onPitExit(async (event: PitExitEvent) => {
+    if (!serviceAvailable) return;
 
-  function checkSectionBoundary(lapDistPct: number, lapNumber: number): void {
-    // Find which section we're currently in
-    let currentSectionIdx = -1;
-    for (let i = 0; i < sectionBoundaries.length; i++) {
-      const section = sectionBoundaries[i];
-      if (lapDistPct >= section.start_pct && lapDistPct < section.end_pct) {
-        currentSectionIdx = i;
-        break;
+    logger.info(`${LOG_PREFIX} Pit exit detected — sending outlap event`);
+
+    const outlapEvent: LapEvent = {
+      track_id: event.trackId,
+      session_id: event.sessionId,
+      lap_number: event.lapNumber,
+      lap_time: 0,
+      lap_type: 'out_lap',
+      delta_best: 0,
+      delta_prev: 0,
+      incidents: 0,
+      session_type: event.sessionType,
+    };
+
+    // Send to service
+    let response: CoachingResponse | null = null;
+    let errorDetail = '';
+    try {
+      const res = await httpRequest(`${serviceUrl}/api/lap`, 'POST', JSON.stringify(outlapEvent));
+      if (res.status >= 200 && res.status < 300) {
+        response = JSON.parse(res.body) as CoachingResponse;
+      } else {
+        errorDetail = `HTTP ${res.status}: ${res.body.slice(0, 200)}`;
       }
+    } catch (err) {
+      errorDetail = (err as Error).message;
     }
 
-    // Detect section transition
-    if (
-      currentSectionIdx !== lastSectionIndex &&
-      lastSectionIndex >= 0 &&
-      currentLapNumber > 0
-    ) {
-      const completedSection = sectionBoundaries[lastSectionIndex];
-
-      // Extract telemetry slice for the completed section
-      const sectionSamples = telemetryBuffer.sliceByDistPct(
-        completedSection.start_pct,
-        completedSection.end_pct
+    if (response) {
+      logger.info(
+        `${LOG_PREFIX} Outlap coaching: "${response.radio_message.slice(0, 60)}..." (behavior=${response.behavior})`
       );
-
-      if (sectionSamples.length > 0) {
-        const sectionEvent: SectionEvent = {
-          track_id: currentTrackId,
-          session_id: currentSessionId,
-          lap_number: lapNumber,
-          section_id: completedSection.section_id,
-          telemetry_slice: {
-            speed: sectionSamples.map((s) => s.speed),
-            brake: sectionSamples.map((s) => s.brake),
-            throttle: sectionSamples.map((s) => s.throttle),
-            steering: sectionSamples.map((s) => s.steering),
-            lap_dist_pct: sectionSamples.map((s) => s.lapDistPct),
-          },
-        };
-
-        sendSectionEvent(sectionEvent);
-      }
+      overlayManager.publishMessage('quietEye:coaching', response);
+      coachingCallbacks.forEach((cb) => cb(response));
+    } else {
+      const errorMsg = errorDetail || 'No response from service';
+      const errorResponse: CoachingResponse = {
+        lap_number: event.lapNumber,
+        radio_message: `⚠️ Coaching error: ${errorMsg}`,
+        coaching_lines: [{ text: errorMsg, priority: 0 }],
+        behavior: 'error',
+      };
+      overlayManager.publishMessage('quietEye:coaching', errorResponse);
+      logger.warn(`${LOG_PREFIX} Outlap error: ${errorMsg}`);
     }
+  });
 
-    lastSectionIndex = currentSectionIdx;
-  }
+  const unsubSection = telemetryEvents.onSectionCrossing(async (event: SectionCrossingEvent) => {
+    if (!serviceAvailable || !config.enableSectionFeedback) return;
 
-  async function sendSectionEvent(event: SectionEvent): Promise<void> {
-    const feedback = await postJson<SectionFeedback>(`${serviceUrl}/api/section`, event);
+    const sectionEvent: SectionEvent = {
+      track_id: event.trackId,
+      session_id: event.sessionId,
+      lap_number: event.lapNumber,
+      section_id: event.sectionId,
+      telemetry_slice: {
+        speed: event.telemetrySlice.map((s) => s.speed),
+        brake: event.telemetrySlice.map((s) => s.brake),
+        throttle: event.telemetrySlice.map((s) => s.throttle),
+        steering: event.telemetrySlice.map((s) => s.steering),
+        lap_dist_pct: event.telemetrySlice.map((s) => s.lapDistPct),
+      },
+    };
+
+    const feedback = await postJson<SectionFeedback>(`${serviceUrl}/api/section`, sectionEvent);
 
     if (feedback) {
       logger.debug(`${LOG_PREFIX} Section ${feedback.section_id}: ${feedback.message}`);
-
-      // Publish to overlays
       overlayManager.publishMessage('quietEye:sectionFeedback', feedback);
-
-      // Notify registered callbacks
       sectionCallbacks.forEach((cb) => cb(feedback));
     }
-  }
-
-  // ─── Subscribe to iRacing SDK Bridge ─────────────────────────────────────
-
-  const unsubTelemetry = irsdkBridge.onTelemetry((telemetry) => {
-    handleTelemetry(telemetry);
   });
 
-  const unsubSession = irsdkBridge.onSessionData((session) => {
-    handleSessionData(session);
+  const unsubSessionChange = telemetryEvents.onSessionChange(async (_event: SessionChangeEvent) => {
+    // Re-check service and load section boundaries for the new track
+    await checkService();
   });
 
-  logger.info(`${LOG_PREFIX} Subscribed to iRacing SDK bridge`);
+  logger.info(`${LOG_PREFIX} Subscribed to telemetry event system`);
 
   // ─── Public Interface ────────────────────────────────────────────────────
 
   return {
     onCoachingResponse: (callback: (response: CoachingResponse) => void) => {
       coachingCallbacks.add(callback);
-      return () => {
-        coachingCallbacks.delete(callback);
-      };
+      return () => { coachingCallbacks.delete(callback); };
     },
     onSectionFeedback: (callback: (feedback: SectionFeedback) => void) => {
       sectionCallbacks.add(callback);
-      return () => {
-        sectionCallbacks.delete(callback);
-      };
+      return () => { sectionCallbacks.delete(callback); };
     },
     stop: () => {
       stopped = true;
       clearInterval(healthInterval);
-      unsubTelemetry?.();
-      unsubSession?.();
+      unsubLap();
+      unsubPitExit();
+      unsubSection();
+      unsubSessionChange();
       coachingCallbacks.clear();
       sectionCallbacks.clear();
-      telemetryBuffer.clear();
       logger.info(`${LOG_PREFIX} Stopped`);
     },
   };

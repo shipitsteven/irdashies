@@ -25,7 +25,8 @@ import { Analytics } from './app/analytics';
 import { setupReferenceLapsBridge } from './app/bridge/referenceLapsBridge';
 import { setupKeybindingsBridge } from './app/bridge/keybindingsBridge';
 import { setupLogBridge } from './app/bridge/logBridge';
-import { setupQuietEyeBridge } from './app/bridge/quietEyeBridge';
+import { setupTelemetryEvents } from './app/bridge/telemetryEvents';
+import { setupQuietEyeBridge, resolveTrackIdViaService } from './app/bridge/quietEyeBridge';
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (started) app.quit();
@@ -73,26 +74,39 @@ app.on('ready', async () => {
   setupKeybindingsBridge(keybindingManager);
 
   // Quiet Eye coaching bridge — non-critical, guarded
+  const quietEyeServiceUrl = 'http://localhost:8878';
   try {
     if (bridge) {
-      await setupQuietEyeBridge(overlayManager, bridge, {
+      // Initialize generic telemetry event system
+      const telemetryEvents = setupTelemetryEvents(bridge, {
+        resolveTrackId: (session) => resolveTrackIdViaService(session, quietEyeServiceUrl),
+      });
+
+      // Initialize Quiet Eye as a consumer of telemetry events
+      await setupQuietEyeBridge(overlayManager, telemetryEvents, {
         enabled: true,
-        serviceUrl: 'http://localhost:8878',
+        serviceUrl: quietEyeServiceUrl,
         enableSectionFeedback: true,
       });
+
+      // Re-wire when bridge changes (e.g. demo mode toggle)
+      onBridgeChanged(async (newBridge) => {
+        try {
+          // Stop old event system and create new one for the new bridge
+          telemetryEvents.stop();
+          const newTelemetryEvents = setupTelemetryEvents(newBridge, {
+            resolveTrackId: (session) => resolveTrackIdViaService(session, quietEyeServiceUrl),
+          });
+          await setupQuietEyeBridge(overlayManager, newTelemetryEvents, {
+            enabled: true,
+            serviceUrl: quietEyeServiceUrl,
+            enableSectionFeedback: true,
+          });
+        } catch (err) {
+          log.warn('Quiet Eye bridge re-init failed (non-fatal)', err);
+        }
+      });
     }
-    // Re-wire when bridge changes (e.g. demo mode toggle)
-    onBridgeChanged(async (newBridge) => {
-      try {
-        await setupQuietEyeBridge(overlayManager, newBridge, {
-          enabled: true,
-          serviceUrl: 'http://localhost:8878',
-          enableSectionFeedback: true,
-        });
-      } catch (err) {
-        log.warn('Quiet Eye bridge re-init failed (non-fatal)', err);
-      }
-    });
   } catch (err) {
     log.warn('Quiet Eye bridge init failed (non-fatal)', err);
   }

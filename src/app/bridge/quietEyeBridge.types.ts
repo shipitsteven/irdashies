@@ -1,7 +1,15 @@
 /**
  * Quiet Eye Coaching Service — TypeScript type definitions.
  * These mirror the JSON schemas at /simcoach/schemas/*.schema.json.
+ *
+ * Generic telemetry types (TelemetrySample, SectionBoundary, SessionType, LapType)
+ * live in ./telemetryEvents/types.ts. This file contains Quiet Eye-specific types only.
  */
+
+import type { SectionBoundary, SessionType, LapType } from './telemetryEvents';
+
+// Re-export for convenience
+export type { SectionBoundary, SessionType, LapType };
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 
@@ -29,9 +37,6 @@ export interface LapTelemetry {
   abs_active?: boolean[];
   gear?: number[];
 }
-
-export type LapType = 'flying' | 'out_lap' | 'in_lap' | 'invalid';
-export type SessionType = 'Practice' | 'Qualifying' | 'Race';
 
 export interface LapEvent {
   track_id: string;
@@ -88,8 +93,8 @@ export interface CoachingResponse {
   radio_message: string;
   coaching_lines: CoachingLine[];
   behavior: string;
-  section_losses: SectionLoss[];
-  metadata: CoachingMetadata;
+  section_losses?: SectionLoss[];
+  metadata?: CoachingMetadata;
 }
 
 // ─── Section Feedback (output from service) ──────────────────────────────────
@@ -109,12 +114,6 @@ export interface SectionFeedback {
 }
 
 // ─── Service Status Response ─────────────────────────────────────────────────
-
-export interface SectionBoundary {
-  section_id: string;
-  start_pct: number;
-  end_pct: number;
-}
 
 export interface ServiceStatus {
   status: string;
