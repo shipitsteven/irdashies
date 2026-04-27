@@ -18,6 +18,8 @@ import { LapTimeLog } from './components/LapTimeLog/LapTimeLog';
 import { InformationBar } from './components/InformationBar/InformationBar';
 import { SlowCarAhead } from './components/SlowCarAhead/SlowCarAhead';
 import { SectorDelta } from './components/SectorDelta/SectorDelta';
+import { CoachingOverlay } from './components/CoachingOverlay';
+import { CornerNameOverlay } from './components/CornerNameOverlay';
 
 export {
   Standings,
@@ -40,6 +42,8 @@ export {
   InformationBar,
   SlowCarAhead,
   SectorDelta,
+  CoachingOverlay,
+  CornerNameOverlay,
 };
 
 // TODO: type this better, right now the config comes from settings
@@ -69,6 +73,8 @@ export const WIDGET_MAP: Record<
   infobar: InformationBar,
   slowcarahead: SlowCarAhead,
   sectordelta: SectorDelta,
+  coaching: CoachingOverlay,
+  cornername: CornerNameOverlay,
 };
 
 export type WidgetId = keyof typeof WIDGET_MAP;

@@ -1,4 +1,5 @@
 import type { DashboardWidget } from './dashboardLayout';
+import type { CoachingOverlayConfig, CornerNameOverlayConfig } from './coaching';
 
 // ===========================
 // Shared primitive types
@@ -568,6 +569,8 @@ export interface WidgetConfigMap {
   infobar: InformationBarConfig;
   slowcarahead: SlowCarAheadConfig;
   sectordelta: SectorDeltaConfig;
+  coaching: CoachingOverlayConfig;
+  cornername: CornerNameOverlayConfig;
 }
 
 export type TypedDashboardWidget<
