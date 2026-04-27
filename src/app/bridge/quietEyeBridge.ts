@@ -511,15 +511,27 @@ export async function setupQuietEyeBridge(
 
   // ─── Send Lap Event ──────────────────────────────────────────────────────
 
+  // Track last error for UI surfacing
+  let lastServiceError = '';
+
   async function sendLapEvent(event: LapEvent, samples: TelemetrySample[]): Promise<void> {
     logger.info(
       `${LOG_PREFIX} Lap ${event.lap_number} complete: ${event.lap_time.toFixed(3)}s ` +
       `(type=${event.lap_type}, delta_best=${event.delta_best.toFixed(3)}s)`
     );
 
-    // We don't include telemetry in the POST body (schema uses telemetry_file for large data)
-    // The Quiet Eye service works with the numeric summary in the LapEvent
-    const response = await postJson<CoachingResponse>(`${serviceUrl}/api/lap`, event);
+    let response: CoachingResponse | null = null;
+    let errorDetail = '';
+    try {
+      const res = await httpRequest(`${serviceUrl}/api/lap`, 'POST', JSON.stringify(event));
+      if (res.status >= 200 && res.status < 300) {
+        response = JSON.parse(res.body) as CoachingResponse;
+      } else {
+        errorDetail = `HTTP ${res.status}: ${res.body.slice(0, 200)}`;
+      }
+    } catch (err) {
+      errorDetail = (err as Error).message;
+    }
 
     if (response) {
       logger.info(
@@ -531,6 +543,18 @@ export async function setupQuietEyeBridge(
 
       // Notify registered callbacks
       coachingCallbacks.forEach((cb) => cb(response));
+    } else {
+      const errorMsg = errorDetail || 'No response from service';
+      const errorResponse: CoachingResponse = {
+        lap_number: event.lap_number,
+        radio_message: `⚠️ Coaching error: ${errorMsg}`,
+        coaching_lines: [
+          { text: errorMsg, priority: 0 },
+        ],
+        behavior: 'error',
+      };
+      overlayManager.publishMessage('quietEye:coaching', errorResponse);
+      logger.warn(`${LOG_PREFIX} Lap ${event.lap_number} error: ${errorMsg}`);
     }
   }
 
