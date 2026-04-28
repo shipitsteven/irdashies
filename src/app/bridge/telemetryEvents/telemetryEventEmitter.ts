@@ -248,7 +248,7 @@ export function setupTelemetryEvents(
 
   // ─── Extract Race Context ────────────────────────────────────────────────
 
-  function extractRaceContext(telemetry: Telemetry, session: Session | null): RaceContext | undefined {
+  function extractRaceContext(telemetry: Telemetry, session: Session | null, fuelUsedThisLap: number = 0): RaceContext | undefined {
     const playerIdx = telemetry.PlayerCarIdx?.value?.[0] ?? 0;
     const positions = telemetry.CarIdxPosition?.value ?? [];
     const classPositions = telemetry.CarIdxClassPosition?.value ?? [];
@@ -319,6 +319,9 @@ export function setupTelemetryEvents(
       incidentLimit,
       safetyCarOut,
       whiteFlag: whiteFlagFired,
+      fuelLevel,
+      fuelPerLap: fuelUsedThisLap > 0 ? fuelUsedThisLap : (fuelUsePerHour > 0 && timeRemaining > 0 && lapsRemaining > 0 ? (fuelUsePerHour / 3600) * (timeRemaining / lapsRemaining) : 0),
+      fuelLapsRemaining: fuelUsedThisLap > 0 ? fuelLevel / fuelUsedThisLap : (fuelUsePerHour > 0 && timeRemaining > 0 && lapsRemaining > 0 ? fuelLevel / ((fuelUsePerHour / 3600) * (timeRemaining / lapsRemaining)) : 0),
     };
   }
 
@@ -555,7 +558,7 @@ export function setupTelemetryEvents(
       const conditions = extractConditions(telemetry, currentSession);
 
       // Build race context
-      const raceContext = extractRaceContext(telemetry, currentSession);
+      const raceContext = extractRaceContext(telemetry, currentSession, Math.max(0, fuelUsedLastLap));
 
       // Build car state
       const carState = extractCarState(telemetry, Math.max(0, fuelUsedLastLap));

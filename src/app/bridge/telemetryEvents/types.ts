@@ -61,6 +61,9 @@ export interface RaceContext {
   incidentLimit: number;
   safetyCarOut: boolean;
   whiteFlag: boolean;
+  fuelLevel: number;
+  fuelPerLap: number;             // average consumption per lap
+  fuelLapsRemaining: number;      // fuelLevel / fuelPerLap
 }
 
 // ─── Car State ───────────────────────────────────────────────────────────────
