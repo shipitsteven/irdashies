@@ -84,7 +84,7 @@ app.on('ready', async () => {
           telemetryEvents.setSectionBoundaries(sections);
           const trackSections = sections.map((b) => ({
             section_id: b.section_id,
-            name: b.section_id.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()),
+            name: (b as any).name || b.section_id.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()),
             start_pct: b.start_pct,
             end_pct: b.end_pct,
           }));
@@ -109,7 +109,7 @@ app.on('ready', async () => {
               newTelemetryEvents.setSectionBoundaries(sections);
               const trackSections = sections.map((b) => ({
                 section_id: b.section_id,
-                name: b.section_id.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()),
+                name: (b as any).name || b.section_id.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()),
                 start_pct: b.start_pct,
                 end_pct: b.end_pct,
               }));
