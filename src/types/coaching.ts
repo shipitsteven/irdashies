@@ -58,6 +58,30 @@ export interface TrackSection {
   end_pct: number; // 0-1 lap distance
 }
 
+// === Service Notifications ===
+
+export type NotificationLevel = 'error' | 'warning' | 'info' | 'success';
+
+export interface ServiceNotification {
+  id: string;
+  level: NotificationLevel;
+  message: string;
+  detail?: string;
+  source: string; // 'llm', 'track', 'alien', 'service', 'adapter'
+  timestamp: number;
+  autoDismissMs?: number; // null/undefined = sticky
+}
+
+export interface ServiceStatus {
+  connected: boolean;
+  processing: boolean;
+  lastError: string | null;
+  trackLoaded: string | null;
+  alienLoaded: boolean;
+  llmAvailable: boolean;
+  activeFallback: string | null; // 'analysis_only' | 'no_alien' | null
+}
+
 // === Widget Config Types ===
 
 export interface CoachingOverlayConfig {

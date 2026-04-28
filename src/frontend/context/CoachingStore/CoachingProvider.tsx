@@ -5,8 +5,9 @@
  * Message channels:
  *   'coaching:response'       → CoachingResponse (per-lap coaching from LLM)
  *   'coaching:section'        → SectionFeedback (per-section real-time)
- *   'coaching:status'         → { connected: boolean, processing: boolean }
+ *   'coaching:status'         → ServiceStatus (expanded service status)
  *   'coaching:track-sections' → TrackSection[] (loaded on track change)
+ *   'coaching:notification'   → ServiceNotification (error/warning/info/success)
  */
 
 import { useEffect } from 'react';
@@ -14,10 +15,13 @@ import { useCoachingStore } from './CoachingStore';
 import type {
   CoachingResponse,
   SectionFeedback,
+  ServiceStatus,
+  ServiceNotification,
   TrackSection,
 } from '@irdashies/types';
 
-interface CoachingStatusMessage {
+// Legacy status message format (backward compat)
+interface LegacyCoachingStatusMessage {
   connected: boolean;
   processing: boolean;
 }
@@ -33,10 +37,13 @@ interface CoachingBridgeApi {
     callback: (data: SectionFeedback) => void
   ) => (() => void) | undefined;
   onCoachingStatus?: (
-    callback: (data: CoachingStatusMessage) => void
+    callback: (data: LegacyCoachingStatusMessage | ServiceStatus) => void
   ) => (() => void) | undefined;
   onTrackSections?: (
     callback: (data: TrackSection[]) => void
+  ) => (() => void) | undefined;
+  onNotification?: (
+    callback: (data: Omit<ServiceNotification, 'id' | 'timestamp'>) => void
   ) => (() => void) | undefined;
 }
 
@@ -51,7 +58,9 @@ export const CoachingProvider = () => {
   const setSectionFeedback = useCoachingStore((s) => s.setSectionFeedback);
   const setServiceConnected = useCoachingStore((s) => s.setServiceConnected);
   const setIsProcessing = useCoachingStore((s) => s.setIsProcessing);
+  const setServiceStatus = useCoachingStore((s) => s.setServiceStatus);
   const setTrackSections = useCoachingStore((s) => s.setTrackSections);
+  const addNotification = useCoachingStore((s) => s.addNotification);
 
   useEffect(() => {
     const bridge = window.coachingBridge;
@@ -75,14 +84,25 @@ export const CoachingProvider = () => {
     if (bridge.onCoachingStatus) {
       unsubs.push(
         bridge.onCoachingStatus((status) => {
-          setServiceConnected(status.connected);
-          setIsProcessing(status.processing);
+          // Handle both legacy format and expanded ServiceStatus
+          if ('trackLoaded' in status || 'llmAvailable' in status) {
+            // Expanded ServiceStatus
+            setServiceStatus(status as Partial<ServiceStatus>);
+          } else {
+            // Legacy format: { connected, processing }
+            setServiceConnected(status.connected);
+            setIsProcessing(status.processing);
+          }
         })
       );
     }
 
     if (bridge.onTrackSections) {
       unsubs.push(bridge.onTrackSections(setTrackSections));
+    }
+
+    if (bridge.onNotification) {
+      unsubs.push(bridge.onNotification(addNotification));
     }
 
     return () => {
@@ -93,7 +113,9 @@ export const CoachingProvider = () => {
     setSectionFeedback,
     setServiceConnected,
     setIsProcessing,
+    setServiceStatus,
     setTrackSections,
+    addNotification,
   ]);
 
   return <></>;

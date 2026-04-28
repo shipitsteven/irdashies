@@ -177,10 +177,15 @@ export async function setupQuietEyeBridge(
       logger.warn(`${LOG_PREFIX} Service unavailable`);
     }
 
-    // Publish service status to renderer
+    // Publish expanded service status to renderer
     overlayManager.publishMessage('quietEye:serviceStatus', {
       connected: serviceAvailable,
       processing: false,
+      lastError: null,
+      trackLoaded: status?.track_id ?? null,
+      alienLoaded: !!(status as unknown as Record<string, unknown>)?.alien_loaded,
+      llmAvailable: !!(status as unknown as Record<string, unknown>)?.llm_available,
+      activeFallback: ((status as unknown as Record<string, unknown>)?.active_fallback as string) ?? null,
     });
 
     // Load section boundaries if available
@@ -255,6 +260,29 @@ export async function setupQuietEyeBridge(
         `${LOG_PREFIX} Coaching: "${response.radio_message.slice(0, 60)}..." (behavior=${response.behavior})`
       );
       overlayManager.publishMessage('quietEye:coaching', response);
+
+      // Publish notifications based on behavior
+      if (response.behavior === 'error') {
+        overlayManager.publishMessage('quietEye:notification', {
+          level: 'error',
+          message: response.radio_message,
+          source: 'service',
+        });
+      } else if (response.behavior === 'fallback_analysis') {
+        overlayManager.publishMessage('quietEye:notification', {
+          level: 'warning',
+          message: 'LLM unavailable — showing raw analysis',
+          source: 'llm',
+        });
+      } else if (response.behavior === 'no_data') {
+        overlayManager.publishMessage('quietEye:notification', {
+          level: 'error',
+          message: response.radio_message,
+          source: 'track',
+        });
+      }
+      // Normal behavior: no notification, coaching shows in overlay
+
       coachingCallbacks.forEach((cb) => cb(response));
     } else {
       const errorMsg = errorDetail || 'No response from service';
@@ -265,6 +293,11 @@ export async function setupQuietEyeBridge(
         behavior: 'error',
       };
       overlayManager.publishMessage('quietEye:coaching', errorResponse);
+      overlayManager.publishMessage('quietEye:notification', {
+        level: 'error',
+        message: `Coaching error: ${errorMsg}`,
+        source: 'service',
+      });
       logger.warn(`${LOG_PREFIX} Lap ${event.lapNumber} error: ${errorMsg}`);
     }
   });
@@ -305,6 +338,28 @@ export async function setupQuietEyeBridge(
         `${LOG_PREFIX} Outlap coaching: "${response.radio_message.slice(0, 60)}..." (behavior=${response.behavior})`
       );
       overlayManager.publishMessage('quietEye:coaching', response);
+
+      // Publish notifications based on behavior
+      if (response.behavior === 'error') {
+        overlayManager.publishMessage('quietEye:notification', {
+          level: 'error',
+          message: response.radio_message,
+          source: 'service',
+        });
+      } else if (response.behavior === 'fallback_analysis') {
+        overlayManager.publishMessage('quietEye:notification', {
+          level: 'warning',
+          message: 'LLM unavailable — showing raw analysis',
+          source: 'llm',
+        });
+      } else if (response.behavior === 'no_data') {
+        overlayManager.publishMessage('quietEye:notification', {
+          level: 'error',
+          message: response.radio_message,
+          source: 'track',
+        });
+      }
+
       coachingCallbacks.forEach((cb) => cb(response));
     } else {
       const errorMsg = errorDetail || 'No response from service';
@@ -315,6 +370,11 @@ export async function setupQuietEyeBridge(
         behavior: 'error',
       };
       overlayManager.publishMessage('quietEye:coaching', errorResponse);
+      overlayManager.publishMessage('quietEye:notification', {
+        level: 'error',
+        message: `Coaching error: ${errorMsg}`,
+        source: 'service',
+      });
       logger.warn(`${LOG_PREFIX} Outlap error: ${errorMsg}`);
     }
   });

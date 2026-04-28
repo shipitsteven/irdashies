@@ -1,9 +1,12 @@
 import type { CoachingOverlayConfig } from '@irdashies/types';
 import { useCoaching } from './hooks/useCoaching';
 import { useSectionFeedback } from './hooks/useSectionFeedback';
+import { useNotifications } from './hooks/useNotifications';
 import { ActionItems } from './components/ActionItems';
 import { RadioMessage } from './components/RadioMessage';
+import { StatusBar } from './components/StatusBar';
 import { StatusIndicator } from './components/StatusIndicator';
+import { NotificationToasts } from './components/NotificationToasts';
 import { SectionToast } from './components/SectionToast';
 import './CoachingOverlay.css';
 
@@ -20,21 +23,36 @@ export const CoachingOverlay = ({
 }: CoachingOverlayProps) => {
   const { latestCoaching, serviceConnected, isProcessing } = useCoaching();
   const { visibleFeedback } = useSectionFeedback();
+  const { notifications, serviceStatus, dismissNotification } =
+    useNotifications();
 
   return (
     <div
       className="w-full rounded-sm p-2"
       style={{ backgroundColor: `rgba(15, 23, 42, ${opacity})` }}
     >
-      {/* Header: Status indicator */}
+      {/* Header: Status bar (replaces simple dot when serviceStatus is available) */}
       {showStatusIndicator && (
         <div className="flex justify-end mb-1">
-          <StatusIndicator
-            connected={serviceConnected}
-            processing={isProcessing}
-          />
+          {serviceStatus ? (
+            <StatusBar
+              status={serviceStatus}
+              notificationCount={notifications.length}
+            />
+          ) : (
+            <StatusIndicator
+              connected={serviceConnected}
+              processing={isProcessing}
+            />
+          )}
         </div>
       )}
+
+      {/* Notification toasts */}
+      <NotificationToasts
+        notifications={notifications}
+        onDismiss={dismissNotification}
+      />
 
       {/* Action items — persistent until next lap */}
       {showActionItems && latestCoaching && (

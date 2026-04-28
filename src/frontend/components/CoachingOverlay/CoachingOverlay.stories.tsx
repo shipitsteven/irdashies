@@ -2,7 +2,12 @@ import { Meta, StoryObj } from '@storybook/react-vite';
 import { useEffect } from 'react';
 import { CoachingOverlay } from './CoachingOverlay';
 import { useCoachingStore } from '@irdashies/context';
-import type { CoachingResponse, SectionFeedback } from '@irdashies/types';
+import type {
+  CoachingResponse,
+  SectionFeedback,
+  ServiceStatus,
+  ServiceNotification,
+} from '@irdashies/types';
 
 export default {
   component: CoachingOverlay,
@@ -61,26 +66,103 @@ const MOCK_SECTION_FEEDBACK: SectionFeedback = {
   message: 'Better entry, still losing on exit',
 };
 
+const MOCK_SERVICE_STATUS_READY: ServiceStatus = {
+  connected: true,
+  processing: false,
+  lastError: null,
+  trackLoaded: 'spa_francorchamps_gp',
+  alienLoaded: true,
+  llmAvailable: true,
+  activeFallback: null,
+};
+
+const MOCK_SERVICE_STATUS_PROCESSING: ServiceStatus = {
+  ...MOCK_SERVICE_STATUS_READY,
+  processing: true,
+};
+
+const MOCK_SERVICE_STATUS_DEGRADED: ServiceStatus = {
+  connected: true,
+  processing: false,
+  lastError: null,
+  trackLoaded: 'spa_francorchamps_gp',
+  alienLoaded: false,
+  llmAvailable: true,
+  activeFallback: 'no_alien',
+};
+
+const MOCK_SERVICE_STATUS_DISCONNECTED: ServiceStatus = {
+  connected: false,
+  processing: false,
+  lastError: 'Connection refused',
+  trackLoaded: null,
+  alienLoaded: false,
+  llmAvailable: false,
+  activeFallback: null,
+};
+
+const MOCK_SERVICE_STATUS_LOADING: ServiceStatus = {
+  connected: true,
+  processing: false,
+  lastError: null,
+  trackLoaded: null,
+  alienLoaded: false,
+  llmAvailable: true,
+  activeFallback: null,
+};
+
+const MOCK_NOTIFICATIONS: ServiceNotification[] = [
+  {
+    id: 'notif_1',
+    level: 'error',
+    message: 'LLM request timed out after 30s',
+    source: 'llm',
+    timestamp: Date.now() - 5000,
+  },
+  {
+    id: 'notif_2',
+    level: 'warning',
+    message: 'LLM unavailable — showing raw analysis',
+    source: 'llm',
+    timestamp: Date.now() - 3000,
+    autoDismissMs: 10000,
+  },
+  {
+    id: 'notif_3',
+    level: 'info',
+    message: 'Track data loaded: Spa-Francorchamps GP',
+    source: 'track',
+    timestamp: Date.now() - 1000,
+    autoDismissMs: 5000,
+  },
+];
+
 function CoachingSeeder({
   coaching,
   connected,
   processing,
+  serviceStatus,
 }: {
   coaching?: CoachingResponse;
   connected?: boolean;
   processing?: boolean;
+  serviceStatus?: ServiceStatus;
 }) {
   useEffect(() => {
     if (coaching) {
       useCoachingStore.getState().setCoaching(coaching);
     }
-    useCoachingStore
-      .getState()
-      .setServiceConnected(connected ?? true);
-    useCoachingStore
-      .getState()
-      .setIsProcessing(processing ?? false);
-  }, [coaching, connected, processing]);
+    if (serviceStatus) {
+      useCoachingStore.getState().setServiceStatus(serviceStatus);
+    } else {
+      useCoachingStore
+        .getState()
+        .setServiceConnected(connected ?? true);
+      useCoachingStore
+        .getState()
+        .setIsProcessing(processing ?? false);
+    }
+  }, [coaching, connected, processing, serviceStatus]);
   return null;
 }
 
@@ -95,10 +177,36 @@ function SectionFeedbackSeeder({
   return null;
 }
 
+function NotificationSeeder({
+  notifications,
+}: {
+  notifications: ServiceNotification[];
+}) {
+  useEffect(() => {
+    // Clear existing, then seed
+    useCoachingStore.getState().clearNotifications();
+    notifications.forEach((n) => {
+      useCoachingStore.getState().addNotification({
+        level: n.level,
+        message: n.message,
+        detail: n.detail,
+        source: n.source,
+        autoDismissMs: n.autoDismissMs,
+      });
+    });
+  }, [notifications]);
+  return null;
+}
+
+// ─── Existing Stories ─────────────────────────────────────────────────────────
+
 export const Connected: Story = {
   render: (args) => (
     <>
-      <CoachingSeeder coaching={MOCK_COACHING} connected processing={false} />
+      <CoachingSeeder
+        coaching={MOCK_COACHING}
+        serviceStatus={MOCK_SERVICE_STATUS_READY}
+      />
       <CoachingOverlay {...args} />
     </>
   ),
@@ -107,7 +215,10 @@ export const Connected: Story = {
 export const Processing: Story = {
   render: (args) => (
     <>
-      <CoachingSeeder coaching={MOCK_COACHING} connected processing />
+      <CoachingSeeder
+        coaching={MOCK_COACHING}
+        serviceStatus={MOCK_SERVICE_STATUS_PROCESSING}
+      />
       <CoachingOverlay {...args} />
     </>
   ),
@@ -116,7 +227,7 @@ export const Processing: Story = {
 export const Disconnected: Story = {
   render: (args) => (
     <>
-      <CoachingSeeder connected={false} processing={false} />
+      <CoachingSeeder serviceStatus={MOCK_SERVICE_STATUS_DISCONNECTED} />
       <CoachingOverlay {...args} />
     </>
   ),
@@ -125,7 +236,10 @@ export const Disconnected: Story = {
 export const WithSectionFeedback: Story = {
   render: (args) => (
     <>
-      <CoachingSeeder coaching={MOCK_COACHING} connected processing={false} />
+      <CoachingSeeder
+        coaching={MOCK_COACHING}
+        serviceStatus={MOCK_SERVICE_STATUS_READY}
+      />
       <SectionFeedbackSeeder feedback={MOCK_SECTION_FEEDBACK} />
       <CoachingOverlay {...args} />
     </>
@@ -142,7 +256,10 @@ export const PersonalBest: Story = {
     };
     return (
       <>
-        <CoachingSeeder coaching={pbCoaching} connected processing={false} />
+        <CoachingSeeder
+          coaching={pbCoaching}
+          serviceStatus={MOCK_SERVICE_STATUS_READY}
+        />
         <CoachingOverlay {...args} />
       </>
     );
@@ -152,7 +269,209 @@ export const PersonalBest: Story = {
 export const EmptyState: Story = {
   render: (args) => (
     <>
-      <CoachingSeeder connected processing={false} />
+      <CoachingSeeder serviceStatus={MOCK_SERVICE_STATUS_READY} />
+      <CoachingOverlay {...args} />
+    </>
+  ),
+};
+
+// ─── StatusBar Stories ────────────────────────────────────────────────────────
+
+export const StatusReady: Story = {
+  name: 'StatusBar / Ready',
+  render: (args) => (
+    <>
+      <CoachingSeeder
+        coaching={MOCK_COACHING}
+        serviceStatus={MOCK_SERVICE_STATUS_READY}
+      />
+      <CoachingOverlay {...args} />
+    </>
+  ),
+};
+
+export const StatusProcessing: Story = {
+  name: 'StatusBar / Processing',
+  render: (args) => (
+    <>
+      <CoachingSeeder
+        coaching={MOCK_COACHING}
+        serviceStatus={MOCK_SERVICE_STATUS_PROCESSING}
+      />
+      <CoachingOverlay {...args} />
+    </>
+  ),
+};
+
+export const StatusDegraded: Story = {
+  name: 'StatusBar / Degraded',
+  render: (args) => (
+    <>
+      <CoachingSeeder
+        coaching={MOCK_COACHING}
+        serviceStatus={MOCK_SERVICE_STATUS_DEGRADED}
+      />
+      <CoachingOverlay {...args} />
+    </>
+  ),
+};
+
+export const StatusDisconnected: Story = {
+  name: 'StatusBar / Disconnected',
+  render: (args) => (
+    <>
+      <CoachingSeeder serviceStatus={MOCK_SERVICE_STATUS_DISCONNECTED} />
+      <CoachingOverlay {...args} />
+    </>
+  ),
+};
+
+export const StatusLoading: Story = {
+  name: 'StatusBar / Loading Track',
+  render: (args) => (
+    <>
+      <CoachingSeeder serviceStatus={MOCK_SERVICE_STATUS_LOADING} />
+      <CoachingOverlay {...args} />
+    </>
+  ),
+};
+
+// ─── Notification Stories ─────────────────────────────────────────────────────
+
+export const NotificationError: Story = {
+  name: 'Notifications / Error',
+  render: (args) => (
+    <>
+      <CoachingSeeder
+        coaching={MOCK_COACHING}
+        serviceStatus={MOCK_SERVICE_STATUS_READY}
+      />
+      <NotificationSeeder
+        notifications={[
+          {
+            id: 'err1',
+            level: 'error',
+            message: 'LLM request timed out after 30s',
+            source: 'llm',
+            timestamp: Date.now(),
+          },
+        ]}
+      />
+      <CoachingOverlay {...args} />
+    </>
+  ),
+};
+
+export const NotificationWarning: Story = {
+  name: 'Notifications / Warning',
+  render: (args) => (
+    <>
+      <CoachingSeeder
+        coaching={MOCK_COACHING}
+        serviceStatus={MOCK_SERVICE_STATUS_DEGRADED}
+      />
+      <NotificationSeeder
+        notifications={[
+          {
+            id: 'warn1',
+            level: 'warning',
+            message: 'LLM unavailable — showing raw analysis',
+            source: 'llm',
+            timestamp: Date.now(),
+            autoDismissMs: 10000,
+          },
+        ]}
+      />
+      <CoachingOverlay {...args} />
+    </>
+  ),
+};
+
+export const NotificationInfo: Story = {
+  name: 'Notifications / Info',
+  render: (args) => (
+    <>
+      <CoachingSeeder
+        coaching={MOCK_COACHING}
+        serviceStatus={MOCK_SERVICE_STATUS_READY}
+      />
+      <NotificationSeeder
+        notifications={[
+          {
+            id: 'info1',
+            level: 'info',
+            message: 'Track data loaded: Spa-Francorchamps GP',
+            source: 'track',
+            timestamp: Date.now(),
+            autoDismissMs: 5000,
+          },
+        ]}
+      />
+      <CoachingOverlay {...args} />
+    </>
+  ),
+};
+
+export const NotificationSuccess: Story = {
+  name: 'Notifications / Success',
+  render: (args) => (
+    <>
+      <CoachingSeeder
+        coaching={MOCK_COACHING}
+        serviceStatus={MOCK_SERVICE_STATUS_READY}
+      />
+      <NotificationSeeder
+        notifications={[
+          {
+            id: 'suc1',
+            level: 'success',
+            message: 'Alien lap data synced successfully',
+            source: 'alien',
+            timestamp: Date.now(),
+            autoDismissMs: 3000,
+          },
+        ]}
+      />
+      <CoachingOverlay {...args} />
+    </>
+  ),
+};
+
+export const NotificationsStacked: Story = {
+  name: 'Notifications / Stacked (3 max)',
+  render: (args) => (
+    <>
+      <CoachingSeeder
+        coaching={MOCK_COACHING}
+        serviceStatus={MOCK_SERVICE_STATUS_DEGRADED}
+      />
+      <NotificationSeeder notifications={MOCK_NOTIFICATIONS} />
+      <CoachingOverlay {...args} />
+    </>
+  ),
+};
+
+export const NotificationsWithBadge: Story = {
+  name: 'Notifications / Badge Count',
+  render: (args) => (
+    <>
+      <CoachingSeeder
+        coaching={MOCK_COACHING}
+        serviceStatus={MOCK_SERVICE_STATUS_READY}
+      />
+      <NotificationSeeder
+        notifications={[
+          ...MOCK_NOTIFICATIONS,
+          {
+            id: 'notif_4',
+            level: 'success',
+            message: 'Connection restored',
+            source: 'service',
+            timestamp: Date.now(),
+            autoDismissMs: 3000,
+          },
+        ]}
+      />
       <CoachingOverlay {...args} />
     </>
   ),
