@@ -26,6 +26,14 @@ export interface LapConditions {
   track_wetness: number;
   air_temp: number;
   precipitation: number;
+  wind_speed?: number;
+  wind_direction?: number;
+  humidity?: number;
+  air_density?: number;
+  air_pressure?: number;
+  fog_level?: number;
+  skies?: number;
+  track_usage?: number;
 }
 
 export interface LapTelemetry {
@@ -36,6 +44,57 @@ export interface LapTelemetry {
   lap_dist_pct: number[];
   abs_active?: boolean[];
   gear?: number[];
+}
+
+export interface LapRaceContext {
+  position: number;
+  class_position: number;
+  total_cars: number;
+  total_cars_in_class: number;
+  gap_ahead: number;
+  gap_behind: number;
+  laps_remaining: number;
+  time_remaining: number;
+  race_duration_minutes: number;
+  pit_stops_remaining: number;
+  incidents: number;
+  incident_limit: number;
+  safety_car_out: boolean;
+}
+
+export interface LapCarState {
+  fuel_level: number;
+  fuel_used_last_lap: number;
+  fuel_pressure: number;
+  oil_temp: number;
+  oil_pressure: number;
+  water_temp: number;
+  voltage: number;
+  engine_rpm: number;
+  brake_bias: number;
+  tire_compound: number;
+}
+
+export interface LapTireData {
+  lf_temp: [number, number, number];
+  rf_temp: [number, number, number];
+  lr_temp: [number, number, number];
+  rr_temp: [number, number, number];
+  lf_wear: [number, number, number];
+  rf_wear: [number, number, number];
+  lr_wear: [number, number, number];
+  rr_wear: [number, number, number];
+}
+
+export interface LapSessionInfo {
+  series_name: string;
+  track_name: string;
+  track_config: string;
+  track_length: string;
+  session_type: string;
+  session_sub_type: string;
+  strength_of_field: number;
+  max_incidents: number;
 }
 
 export interface LapEvent {
@@ -49,6 +108,10 @@ export interface LapEvent {
   incidents: number;
   session_type: SessionType;
   conditions?: LapConditions;
+  race_context?: LapRaceContext;
+  car_state?: LapCarState;
+  tire_data?: LapTireData;
+  session_info?: LapSessionInfo;
 }
 
 // ─── Section Event (input to service) ────────────────────────────────────────

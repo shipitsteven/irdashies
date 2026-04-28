@@ -232,6 +232,69 @@ export async function setupQuietEyeBridge(
             track_wetness: event.conditions.trackWetness,
             air_temp: event.conditions.airTemp,
             precipitation: event.conditions.precipitation,
+            wind_speed: event.conditions.windSpeed,
+            wind_direction: event.conditions.windDirection,
+            humidity: event.conditions.humidity,
+            air_density: event.conditions.airDensity,
+            air_pressure: event.conditions.airPressure,
+            fog_level: event.conditions.fogLevel,
+            skies: event.conditions.skies,
+            track_usage: event.conditions.trackUsage,
+          }
+        : undefined,
+      race_context: event.raceContext
+        ? {
+            position: event.raceContext.position,
+            class_position: event.raceContext.classPosition,
+            total_cars: event.raceContext.totalCars,
+            total_cars_in_class: event.raceContext.totalCarsInClass,
+            gap_ahead: event.raceContext.gapAhead,
+            gap_behind: event.raceContext.gapBehind,
+            laps_remaining: event.raceContext.lapsRemaining,
+            time_remaining: event.raceContext.timeRemaining,
+            race_duration_minutes: event.raceContext.raceDurationMinutes,
+            pit_stops_remaining: event.raceContext.pitStopsRemaining,
+            incidents: event.raceContext.incidents,
+            incident_limit: event.raceContext.incidentLimit,
+            safety_car_out: event.raceContext.safetyCarOut,
+          }
+        : undefined,
+      car_state: event.carState
+        ? {
+            fuel_level: event.carState.fuelLevel,
+            fuel_used_last_lap: event.carState.fuelUsedLastLap,
+            fuel_pressure: event.carState.fuelPressure,
+            oil_temp: event.carState.oilTemp,
+            oil_pressure: event.carState.oilPressure,
+            water_temp: event.carState.waterTemp,
+            voltage: event.carState.voltage,
+            engine_rpm: event.carState.engineRPM,
+            brake_bias: event.carState.brakeBias,
+            tire_compound: event.carState.tireCompound,
+          }
+        : undefined,
+      tire_data: event.tireData
+        ? {
+            lf_temp: event.tireData.lfTemp,
+            rf_temp: event.tireData.rfTemp,
+            lr_temp: event.tireData.lrTemp,
+            rr_temp: event.tireData.rrTemp,
+            lf_wear: event.tireData.lfWear,
+            rf_wear: event.tireData.rfWear,
+            lr_wear: event.tireData.lrWear,
+            rr_wear: event.tireData.rrWear,
+          }
+        : undefined,
+      session_info: event.sessionInfo
+        ? {
+            series_name: event.sessionInfo.seriesName,
+            track_name: event.sessionInfo.trackName,
+            track_config: event.sessionInfo.trackConfig,
+            track_length: event.sessionInfo.trackLength,
+            session_type: event.sessionInfo.sessionType,
+            session_sub_type: event.sessionInfo.sessionSubType,
+            strength_of_field: event.sessionInfo.strengthOfField,
+            max_incidents: event.sessionInfo.maxIncidents,
           }
         : undefined,
     };

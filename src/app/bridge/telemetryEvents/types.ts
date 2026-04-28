@@ -15,6 +15,15 @@ export interface TelemetrySample {
   lapDistPct: number;
   gear: number;
   absActive: boolean;
+  // Expanded performance channels
+  rpm: number;
+  latAccel: number;
+  longAccel: number;
+  yawRate: number;
+  tractionControl: number;
+  clutch: number;
+  onPitRoad: boolean;
+  trackSurface: number;
 }
 
 // ─── Section Boundary ────────────────────────────────────────────────────────
@@ -33,6 +42,82 @@ export type SessionType = 'Practice' | 'Qualifying' | 'Race';
 
 export type LapType = 'flying' | 'out_lap' | 'in_lap' | 'invalid';
 
+// ─── Race Context ────────────────────────────────────────────────────────────
+
+export interface RaceContext {
+  position: number;
+  classPosition: number;
+  totalCars: number;
+  totalCarsInClass: number;
+  gapAhead: number;
+  gapBehind: number;
+  lapsRemaining: number;
+  timeRemaining: number;
+  raceDurationMinutes: number;
+  pitStopsRemaining: number;
+  incidents: number;
+  incidentLimit: number;
+  safetyCarOut: boolean;
+}
+
+// ─── Car State ───────────────────────────────────────────────────────────────
+
+export interface CarState {
+  fuelLevel: number;
+  fuelUsedLastLap: number;
+  fuelPressure: number;
+  oilTemp: number;
+  oilPressure: number;
+  waterTemp: number;
+  voltage: number;
+  engineRPM: number;
+  brakeBias: number;
+  tireCompound: number;
+}
+
+// ─── Tire Data ───────────────────────────────────────────────────────────────
+
+export interface TireData {
+  lfTemp: [number, number, number];
+  rfTemp: [number, number, number];
+  lrTemp: [number, number, number];
+  rrTemp: [number, number, number];
+  lfWear: [number, number, number];
+  rfWear: [number, number, number];
+  lrWear: [number, number, number];
+  rrWear: [number, number, number];
+}
+
+// ─── Conditions ──────────────────────────────────────────────────────────────
+
+export interface Conditions {
+  trackTemp: number;
+  airTemp: number;
+  trackWetness: number;
+  precipitation: number;
+  windSpeed: number;
+  windDirection: number;
+  humidity: number;
+  airDensity: number;
+  airPressure: number;
+  fogLevel: number;
+  skies: number;
+  trackUsage: number;
+}
+
+// ─── Session Info Snapshot ───────────────────────────────────────────────────
+
+export interface SessionInfoSnapshot {
+  seriesName: string;
+  trackName: string;
+  trackConfig: string;
+  trackLength: string;
+  sessionType: string;
+  sessionSubType: string;
+  strengthOfField: number;
+  maxIncidents: number;
+}
+
 // ─── Events ──────────────────────────────────────────────────────────────────
 
 export interface LapCompleteEvent {
@@ -47,13 +132,13 @@ export interface LapCompleteEvent {
   incidents: number;
   lapType: LapType;
   sessionType: SessionType;
-  conditions: {
-    trackTemp: number;
-    trackWetness: number;
-    airTemp: number;
-    precipitation: number;
-  };
+  conditions: Conditions;
   telemetrySamples: TelemetrySample[];
+  // Enriched data (all optional for backward compat)
+  raceContext?: RaceContext;
+  carState?: CarState;
+  tireData?: TireData;
+  sessionInfo?: SessionInfoSnapshot;
 }
 
 export interface PitExitEvent {

@@ -15,4 +15,9 @@ export type {
   PitExitEvent,
   SectionCrossingEvent,
   SessionChangeEvent,
+  RaceContext,
+  CarState,
+  TireData,
+  Conditions,
+  SessionInfoSnapshot,
 } from './types';

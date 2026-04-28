@@ -5,7 +5,8 @@
  * and emits high-level racing events (lap complete, pit exit, section crossing,
  * session change) to registered callbacks.
  *
- * Has NO knowledge of Quiet Eye, HTTP, or any specific downstream service.
+ * Enriched with full iRacing data: race context, car state, tire data,
+ * expanded conditions, and session info. Consumers choose what to use.
  */
 
 import type { IrSdkBridge, Session, Telemetry } from '@irdashies/types';
@@ -22,6 +23,11 @@ import type {
   PitExitEvent,
   SectionCrossingEvent,
   SessionChangeEvent,
+  RaceContext,
+  CarState,
+  TireData,
+  Conditions,
+  SessionInfoSnapshot,
 } from './types';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -84,6 +90,58 @@ function classifyLap(
   return 'flying';
 }
 
+// ─── Helper: Parse incident limit from session info ──────────────────────────
+
+function parseIncidentLimit(session: Session): number {
+  const raw = session.WeekendInfo?.WeekendOptions?.IncidentLimit;
+  if (!raw) return 0;
+  const parsed = parseInt(raw, 10);
+  return isNaN(parsed) ? 0 : parsed;
+}
+
+// ─── Helper: Calculate gap to nearest car ahead/behind in same class ─────────
+
+function calculateGaps(
+  telemetry: Telemetry,
+  playerIdx: number,
+  playerClassId: number
+): { gapAhead: number; gapBehind: number } {
+  const estTimes = telemetry.CarIdxEstTime?.value ?? [];
+  const classIds = telemetry.CarIdxClass?.value ?? [];
+  const positions = telemetry.CarIdxClassPosition?.value ?? [];
+
+  const playerEstTime = estTimes[playerIdx] ?? 0;
+  const playerClassPos = positions[playerIdx] ?? 0;
+
+  if (playerEstTime <= 0 || playerClassPos <= 0) {
+    return { gapAhead: 0, gapBehind: 0 };
+  }
+
+  let gapAhead = 0;
+  let gapBehind = 0;
+
+  // Find car immediately ahead (classPosition = playerClassPos - 1)
+  // and car immediately behind (classPosition = playerClassPos + 1) in same class
+  for (let i = 0; i < classIds.length; i++) {
+    if (i === playerIdx) continue;
+    if (classIds[i] !== playerClassId) continue;
+
+    const otherPos = positions[i] ?? 0;
+    const otherEstTime = estTimes[i] ?? 0;
+    if (otherPos <= 0 || otherEstTime <= 0) continue;
+
+    if (otherPos === playerClassPos - 1) {
+      // Car ahead
+      gapAhead = playerEstTime - otherEstTime;
+    } else if (otherPos === playerClassPos + 1) {
+      // Car behind
+      gapBehind = otherEstTime - playerEstTime;
+    }
+  }
+
+  return { gapAhead, gapBehind };
+}
+
 // ─── Setup Function ──────────────────────────────────────────────────────────
 
 export function setupTelemetryEvents(
@@ -107,6 +165,9 @@ export function setupTelemetryEvents(
   let sectionBoundaries: SectionBoundary[] = config.sectionBoundaries ?? [];
   let lastSectionIndex = -1;
   let stopped = false;
+
+  // Fuel tracking
+  let fuelAtLapStart = 0;
 
   // Track ID resolution cache
   let resolvedTrackIdCache: string | null = null;
@@ -147,6 +208,7 @@ export function setupTelemetryEvents(
       bestLapTime = Infinity;
       lastIncidents = 0;
       lapStartIncidents = 0;
+      fuelAtLapStart = 0;
       telemetryBuffer.clear();
       lastSectionIndex = -1;
 
@@ -164,6 +226,208 @@ export function setupTelemetryEvents(
       currentSession = session;
       currentSessionType = resolveSessionType(session);
     }
+  }
+
+  // ─── Extract Race Context ────────────────────────────────────────────────
+
+  function extractRaceContext(telemetry: Telemetry, session: Session | null): RaceContext | undefined {
+    const playerIdx = telemetry.PlayerCarIdx?.value?.[0] ?? 0;
+    const positions = telemetry.CarIdxPosition?.value ?? [];
+    const classPositions = telemetry.CarIdxClassPosition?.value ?? [];
+    const classIds = telemetry.CarIdxClass?.value ?? [];
+
+    const position = positions[playerIdx] ?? 0;
+    const classPosition = classPositions[playerIdx] ?? 0;
+    const playerClassId = classIds[playerIdx] ?? 0;
+
+    // Count active cars
+    let totalCars = 0;
+    let totalCarsInClass = 0;
+    for (let i = 0; i < positions.length; i++) {
+      if (positions[i] > 0) {
+        totalCars++;
+        if (classIds[i] === playerClassId) {
+          totalCarsInClass++;
+        }
+      }
+    }
+
+    // Gaps
+    const { gapAhead, gapBehind } = calculateGaps(telemetry, playerIdx, playerClassId);
+
+    // Session time/laps remaining
+    const lapsRemaining = telemetry.SessionLapsRemainEx?.value?.[0] ?? 0;
+    const timeRemaining = telemetry.SessionTimeRemain?.value?.[0] ?? 0;
+
+    // Race duration estimate
+    const sessionTimeTotal = telemetry.SessionTimeTotal?.value?.[0] ?? 0;
+    const raceDurationMinutes = sessionTimeTotal > 0 ? sessionTimeTotal / 60 : 0;
+
+    // Pit stops remaining (estimate from fuel data)
+    const fuelLevel = telemetry.FuelLevel?.value?.[0] ?? 0;
+    const fuelUsePerHour = telemetry.FuelUsePerHour?.value?.[0] ?? 0;
+    let pitStopsRemaining = 0;
+    if (fuelUsePerHour > 0 && timeRemaining > 0) {
+      const fuelNeeded = (fuelUsePerHour / 3600) * timeRemaining;
+      const maxFuel = session?.DriverInfo?.DriverCarFuelMaxLtr ?? 0;
+      if (maxFuel > 0) {
+        const totalFuelNeeded = Math.max(0, fuelNeeded - fuelLevel);
+        pitStopsRemaining = Math.ceil(totalFuelNeeded / maxFuel);
+      }
+    }
+
+    // Incidents
+    const incidents = telemetry.PlayerCarMyIncidentCount?.value?.[0] ?? 0;
+    const incidentLimit = session ? parseIncidentLimit(session) : 0;
+
+    // Safety car detection (PaceMode > 0 or CarIdxPaceLine has active entries)
+    const paceMode = telemetry.PaceMode?.value?.[0] ?? 0;
+    const safetyCarOut = paceMode > 0;
+
+    return {
+      position,
+      classPosition,
+      totalCars,
+      totalCarsInClass,
+      gapAhead,
+      gapBehind,
+      lapsRemaining,
+      timeRemaining,
+      raceDurationMinutes,
+      pitStopsRemaining,
+      incidents,
+      incidentLimit,
+      safetyCarOut,
+    };
+  }
+
+  // ─── Extract Car State ───────────────────────────────────────────────────
+
+  function extractCarState(telemetry: Telemetry, fuelUsedLastLap: number): CarState {
+    return {
+      fuelLevel: telemetry.FuelLevel?.value?.[0] ?? 0,
+      fuelUsedLastLap,
+      fuelPressure: telemetry.FuelPress?.value?.[0] ?? 0,
+      oilTemp: telemetry.OilTemp?.value?.[0] ?? 0,
+      oilPressure: telemetry.OilPress?.value?.[0] ?? 0,
+      waterTemp: telemetry.WaterTemp?.value?.[0] ?? 0,
+      voltage: telemetry.Voltage?.value?.[0] ?? 0,
+      engineRPM: telemetry.RPM?.value?.[0] ?? 0,
+      brakeBias: telemetry.dcBrakeBias?.value?.[0] ?? 0,
+      tireCompound: telemetry.PlayerTireCompound?.value?.[0] ?? 0,
+    };
+  }
+
+  // ─── Extract Tire Data ───────────────────────────────────────────────────
+
+  function extractTireData(telemetry: Telemetry): TireData {
+    return {
+      lfTemp: [
+        telemetry.LFtempCL?.value?.[0] ?? 0,
+        telemetry.LFtempCM?.value?.[0] ?? 0,
+        telemetry.LFtempCR?.value?.[0] ?? 0,
+      ],
+      rfTemp: [
+        telemetry.RFtempCL?.value?.[0] ?? 0,
+        telemetry.RFtempCM?.value?.[0] ?? 0,
+        telemetry.RFtempCR?.value?.[0] ?? 0,
+      ],
+      lrTemp: [
+        telemetry.LRtempCL?.value?.[0] ?? 0,
+        telemetry.LRtempCM?.value?.[0] ?? 0,
+        telemetry.LRtempCR?.value?.[0] ?? 0,
+      ],
+      rrTemp: [
+        telemetry.RRtempCL?.value?.[0] ?? 0,
+        telemetry.RRtempCM?.value?.[0] ?? 0,
+        telemetry.RRtempCR?.value?.[0] ?? 0,
+      ],
+      lfWear: [
+        telemetry.LFwearL?.value?.[0] ?? 0,
+        telemetry.LFwearM?.value?.[0] ?? 0,
+        telemetry.LFwearR?.value?.[0] ?? 0,
+      ],
+      rfWear: [
+        telemetry.RFwearL?.value?.[0] ?? 0,
+        telemetry.RFwearM?.value?.[0] ?? 0,
+        telemetry.RFwearR?.value?.[0] ?? 0,
+      ],
+      lrWear: [
+        telemetry.LRwearL?.value?.[0] ?? 0,
+        telemetry.LRwearM?.value?.[0] ?? 0,
+        telemetry.LRwearR?.value?.[0] ?? 0,
+      ],
+      rrWear: [
+        telemetry.RRwearL?.value?.[0] ?? 0,
+        telemetry.RRwearM?.value?.[0] ?? 0,
+        telemetry.RRwearR?.value?.[0] ?? 0,
+      ],
+    };
+  }
+
+  // ─── Extract Conditions ──────────────────────────────────────────────────
+
+  function extractConditions(telemetry: Telemetry, session: Session | null): Conditions {
+    // Track usage from session info (parse from TrackSessionRubberState or estimate)
+    let trackUsage = 0;
+    if (session) {
+      const sessions = session.SessionInfo?.Sessions ?? [];
+      for (const s of sessions) {
+        const rubberState = s.SessionTrackRubberState?.toLowerCase() ?? '';
+        if (rubberState.includes('high')) trackUsage = 75;
+        else if (rubberState.includes('moderate')) trackUsage = 50;
+        else if (rubberState.includes('low')) trackUsage = 25;
+        else if (rubberState.includes('clean')) trackUsage = 0;
+      }
+    }
+
+    return {
+      trackTemp: telemetry.TrackTempCrew?.value?.[0] ?? telemetry.TrackTemp?.value?.[0] ?? 0,
+      airTemp: telemetry.AirTemp?.value?.[0] ?? 0,
+      trackWetness: telemetry.TrackWetness?.value?.[0] ?? 0,
+      precipitation: telemetry.Precipitation?.value?.[0] ?? 0,
+      windSpeed: telemetry.WindVel?.value?.[0] ?? 0,
+      windDirection: telemetry.WindDir?.value?.[0] ?? 0,
+      humidity: telemetry.RelativeHumidity?.value?.[0] ?? 0,
+      airDensity: telemetry.AirDensity?.value?.[0] ?? 0,
+      airPressure: telemetry.AirPressure?.value?.[0] ?? 0,
+      fogLevel: telemetry.FogLevel?.value?.[0] ?? 0,
+      skies: telemetry.Skies?.value?.[0] ?? 0,
+      trackUsage,
+    };
+  }
+
+  // ─── Extract Session Info Snapshot ───────────────────────────────────────
+
+  function extractSessionInfo(session: Session | null, sessionNum: number): SessionInfoSnapshot | undefined {
+    if (!session) return undefined;
+
+    const weekend = session.WeekendInfo;
+    const sessions = session.SessionInfo?.Sessions ?? [];
+    const activeSession = sessions[sessionNum];
+
+    // Attempt to get SOF from results or driver info
+    let strengthOfField = 0;
+    const drivers = session.DriverInfo?.Drivers ?? [];
+    if (drivers.length > 0) {
+      const ratings = drivers
+        .filter((d) => d.IRating > 0 && !d.CarIsPaceCar)
+        .map((d) => d.IRating);
+      if (ratings.length > 0) {
+        strengthOfField = Math.round(ratings.reduce((a, b) => a + b, 0) / ratings.length);
+      }
+    }
+
+    return {
+      seriesName: weekend.TrackDisplayName ?? weekend.TrackName ?? '',
+      trackName: weekend.TrackName ?? '',
+      trackConfig: weekend.TrackConfigName ?? '',
+      trackLength: weekend.TrackLength ?? '',
+      sessionType: activeSession?.SessionType ?? '',
+      sessionSubType: activeSession?.SessionSubType ?? '',
+      strengthOfField,
+      maxIncidents: parseIncidentLimit(session),
+    };
   }
 
   // ─── Telemetry Handler ───────────────────────────────────────────────────
@@ -185,6 +449,15 @@ export function setupTelemetryEvents(
     const incidents = telemetry.PlayerCarMyIncidentCount?.value?.[0] ?? 0;
     const sessionNum = telemetry.SessionNum?.value?.[0] ?? 0;
 
+    // Expanded sample fields
+    const rpm = telemetry.RPM?.value?.[0] ?? 0;
+    const latAccel = telemetry.LatAccel?.value?.[0] ?? 0;
+    const longAccel = telemetry.LongAccel?.value?.[0] ?? 0;
+    const yawRate = telemetry.YawRate?.value?.[0] ?? 0;
+    const tractionControl = telemetry.dcTractionControl?.value?.[0] ?? 0;
+    const clutch = telemetry.Clutch?.value?.[0] ?? 0;
+    const trackSurface = telemetry.PlayerTrackSurface?.value?.[0] ?? 0;
+
     // Resolve session type from active session number
     if (currentSession) {
       currentSessionType = resolveSessionTypeFromNum(currentSession, sessionNum);
@@ -199,6 +472,14 @@ export function setupTelemetryEvents(
       lapDistPct,
       gear,
       absActive,
+      rpm,
+      latAccel,
+      longAccel,
+      yawRate,
+      tractionControl,
+      clutch,
+      onPitRoad,
+      trackSurface,
     };
     telemetryBuffer.push(sample);
 
@@ -223,16 +504,27 @@ export function setupTelemetryEvents(
       // Classify lap type
       const lapType = classifyLap(onPitRoad, wasOnPitRoad, completedLapTime);
 
+      // Fuel usage calculation
+      const currentFuel = telemetry.FuelLevel?.value?.[0] ?? 0;
+      const fuelUsedLastLap = fuelAtLapStart > 0 ? fuelAtLapStart - currentFuel : 0;
+
       // Drain buffer — this IS the completed lap's telemetry
       const samples = telemetryBuffer.drain();
 
-      // Build conditions from live telemetry
-      const conditions = {
-        trackTemp: telemetry.TrackTemp?.value?.[0] ?? 0,
-        trackWetness: telemetry.TrackWetness?.value?.[0] ?? 0,
-        airTemp: telemetry.AirTemp?.value?.[0] ?? 0,
-        precipitation: telemetry.Precipitation?.value?.[0] ?? 0,
-      };
+      // Build enriched conditions
+      const conditions = extractConditions(telemetry, currentSession);
+
+      // Build race context
+      const raceContext = extractRaceContext(telemetry, currentSession);
+
+      // Build car state
+      const carState = extractCarState(telemetry, Math.max(0, fuelUsedLastLap));
+
+      // Build tire data
+      const tireData = extractTireData(telemetry);
+
+      // Build session info
+      const sessionInfo = extractSessionInfo(currentSession, sessionNum);
 
       // Emit lap complete event
       const event: LapCompleteEvent = {
@@ -249,11 +541,16 @@ export function setupTelemetryEvents(
         sessionType: currentSessionType,
         conditions,
         telemetrySamples: samples,
+        raceContext,
+        carState,
+        tireData,
+        sessionInfo,
       };
 
       // Update state for next lap
       previousLapTime = completedLapTime;
       lapStartIncidents = incidents;
+      fuelAtLapStart = currentFuel; // Record fuel level at start of new lap
 
       lapCompleteCallbacks.forEach((cb) => cb(event));
     }
@@ -262,6 +559,7 @@ export function setupTelemetryEvents(
     if (lapNumber > 0 && currentLapNumber !== lapNumber) {
       if (currentLapNumber === -1) {
         lapStartIncidents = incidents;
+        fuelAtLapStart = telemetry.FuelLevel?.value?.[0] ?? 0;
       }
       currentLapNumber = lapNumber;
       lastSectionIndex = -1; // Reset section tracking for new lap
