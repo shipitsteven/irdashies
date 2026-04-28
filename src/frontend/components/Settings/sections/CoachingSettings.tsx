@@ -7,6 +7,7 @@ import { SettingsSection } from '../components/SettingSection';
 import { SettingToggleRow } from '../components/SettingToggleRow';
 import { SettingNumberRow } from '../components/SettingNumberRow';
 import { SettingSliderRow } from '../components/SettingSliderRow';
+import { SessionVisibility } from '../components/SessionVisibility';
 
 const SETTING_ID = 'coaching';
 
@@ -85,6 +86,13 @@ export const CoachingSettings = () => {
               enabled={settings.config.showStatusIndicator}
               onToggle={(v) => handleConfigChange({ showStatusIndicator: v })}
             />
+
+            <SettingToggleRow
+              title="Headless Mode"
+              description="Run coaching service connection and TTS without showing any overlay. Use when you only want voice coaching."
+              enabled={settings.config.headless}
+              onToggle={(v) => handleConfigChange({ headless: v })}
+            />
           </SettingsSection>
 
           <SettingsSection title="Appearance">
@@ -107,6 +115,13 @@ export const CoachingSettings = () => {
               max={100}
               step={5}
               onChange={(v) => handleConfigChange({ opacity: v / 100 })}
+            />
+          </SettingsSection>
+
+          <SettingsSection title="Session Visibility">
+            <SessionVisibility
+              sessionVisibility={settings.config.sessionVisibility}
+              handleConfigChange={handleConfigChange}
             />
           </SettingsSection>
 

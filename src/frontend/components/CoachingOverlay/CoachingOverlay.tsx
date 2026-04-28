@@ -1,4 +1,5 @@
 import type { CoachingOverlayConfig } from '@irdashies/types';
+import { useSessionVisibility } from '@irdashies/context';
 import { useCoaching } from './hooks/useCoaching';
 import { useSectionFeedback } from './hooks/useSectionFeedback';
 import { useNotifications } from './hooks/useNotifications';
@@ -20,11 +21,20 @@ export const CoachingOverlay = ({
   showStatusIndicator = true,
   fontSize = 14,
   opacity = 0.9,
+  headless = false,
+  sessionVisibility,
 }: CoachingOverlayProps) => {
   const { latestCoaching, serviceConnected, isProcessing } = useCoaching();
   const { visibleFeedback } = useSectionFeedback();
   const { notifications, serviceStatus, dismissNotification } =
     useNotifications();
+  const isSessionVisible = useSessionVisibility(sessionVisibility);
+
+  // Headless mode: hooks run (keeping service bridge active for TTS) but nothing renders
+  if (headless) return null;
+
+  // Session visibility: hide when not in the right session type
+  if (!isSessionVisible) return null;
 
   return (
     <div

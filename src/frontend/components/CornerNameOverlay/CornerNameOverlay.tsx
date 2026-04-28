@@ -1,4 +1,5 @@
 import type { CornerNameOverlayConfig } from '@irdashies/types';
+import { useSessionVisibility, useTelemetryValueRounded } from '@irdashies/context';
 import { useCurrentSection } from './hooks/useCurrentSection';
 
 type CornerNameOverlayProps = Partial<CornerNameOverlayConfig>;
@@ -7,10 +8,16 @@ export const CornerNameOverlay = ({
   showSubtitle = true,
   showCornerNumber = true,
   showProgressBar = true,
+  showTrackPct = true,
   fontSize = 18,
   opacity = 0.9,
+  sessionVisibility,
 }: CornerNameOverlayProps) => {
   const { section, progress } = useCurrentSection();
+  const lapDistPct = useTelemetryValueRounded('LapDistPct', 3) ?? 0;
+  const isSessionVisible = useSessionVisibility(sessionVisibility);
+
+  if (!isSessionVisible) return null;
 
   if (!section) {
     return (
@@ -61,6 +68,16 @@ export const CornerNameOverlay = ({
             </span>
           )}
         </div>
+
+        {/* Track percentage */}
+        {showTrackPct && (
+          <span
+            className="text-slate-400 tabular-nums ml-auto"
+            style={{ fontSize: `${fontSize - 4}px` }}
+          >
+            {Math.round(lapDistPct * 100)}%
+          </span>
+        )}
       </div>
 
       {/* Progress bar */}

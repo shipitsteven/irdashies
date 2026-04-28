@@ -84,6 +84,8 @@ export interface ServiceStatus {
 
 // === Widget Config Types ===
 
+import type { SessionVisibilitySettings } from './widgetConfigs';
+
 export interface CoachingOverlayConfig {
   showRadioMessage: boolean;
   radioFadeDuration: number; // seconds
@@ -92,12 +94,16 @@ export interface CoachingOverlayConfig {
   showStatusIndicator: boolean;
   fontSize: number;
   opacity: number;
+  sessionVisibility: SessionVisibilitySettings;
+  headless: boolean; // run service without visible overlay
 }
 
 export interface CornerNameOverlayConfig {
   showSubtitle: boolean;
   showCornerNumber: boolean;
   showProgressBar: boolean;
+  showTrackPct: boolean; // show track percentage
   fontSize: number;
   opacity: number;
+  sessionVisibility: SessionVisibilitySettings;
 }
