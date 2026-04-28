@@ -23,7 +23,7 @@ import type {
 
 const LOG_PREFIX = '[QuietEyeBridge]';
 const HEALTH_CHECK_INTERVAL_MS = 10_000;
-const SERVICE_TIMEOUT_MS = 30_000; // LLM coaching calls take 15-25s
+const SERVICE_TIMEOUT_MS = 60_000; // LLM coaching calls can take 30-45s via Bedrock tunnel
 
 // ─── HTTP Helpers (Node built-in) ────────────────────────────────────────────
 
