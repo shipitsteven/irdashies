@@ -23,11 +23,14 @@ import type {
   PitExitEvent,
   SectionCrossingEvent,
   SessionChangeEvent,
+  WhiteFlagEvent,
+  CheckeredFlagEvent,
   RaceContext,
   CarState,
   TireData,
   Conditions,
   SessionInfoSnapshot,
+  CarInfo,
 } from './types';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -173,6 +176,10 @@ export function setupTelemetryEvents(
   let lastSectionIndex = -1;
   let stopped = false;
 
+  // Flag tracking
+  let whiteFlagFired = false;
+  let checkeredFlagFired = false;
+
   // Fuel tracking
   let fuelAtLapStart = 0;
 
@@ -185,6 +192,8 @@ export function setupTelemetryEvents(
   const pitExitCallbacks = new Set<(event: PitExitEvent) => void>();
   const sectionCrossingCallbacks = new Set<(event: SectionCrossingEvent) => void>();
   const sessionChangeCallbacks = new Set<(event: SessionChangeEvent) => void>();
+  const whiteFlagCallbacks = new Set<(event: WhiteFlagEvent) => void>();
+  const checkeredFlagCallbacks = new Set<(event: CheckeredFlagEvent) => void>();
 
   // ─── Session Data Handler ────────────────────────────────────────────────
 
@@ -218,6 +227,8 @@ export function setupTelemetryEvents(
       fuelAtLapStart = 0;
       telemetryBuffer.clear();
       lastSectionIndex = -1;
+      whiteFlagFired = false;
+      checkeredFlagFired = false;
 
       currentSession = session;
       currentSessionType = resolveSessionType(session);
@@ -307,6 +318,7 @@ export function setupTelemetryEvents(
       incidents,
       incidentLimit,
       safetyCarOut,
+      whiteFlag: whiteFlagFired,
     };
   }
 
@@ -439,6 +451,22 @@ export function setupTelemetryEvents(
     };
   }
 
+  // ─── Extract Car Info ────────────────────────────────────────────────────────────
+
+  function extractCarInfo(session: Session | null): CarInfo | undefined {
+    if (!session?.DriverInfo) return undefined;
+    const playerIdx = session.DriverInfo.DriverCarIdx ?? 0;
+    const driver = session.DriverInfo.Drivers?.[playerIdx];
+    if (!driver) return undefined;
+    return {
+      carId: driver.CarID ?? 0,
+      carScreenName: driver.CarScreenName ?? '',
+      carClassId: driver.CarClassID ?? 0,
+      carClassShortName: driver.CarClassShortName ?? '',
+      carPath: driver.CarPath ?? '',
+    };
+  }
+
   // ─── Telemetry Handler ───────────────────────────────────────────────────
 
   function handleTelemetry(telemetry: Telemetry): void {
@@ -457,6 +485,9 @@ export function setupTelemetryEvents(
     const onPitRoad = telemetry.OnPitRoad?.value?.[0] ?? false;
     const incidents = telemetry.PlayerCarMyIncidentCount?.value?.[0] ?? 0;
     const sessionNum = telemetry.SessionNum?.value?.[0] ?? 0;
+
+    // Session flags for white/checkered detection
+    const sessionFlags = telemetry.SessionFlags?.value?.[0] ?? 0;
 
     // Expanded sample fields
     const rpm = telemetry.RPM?.value?.[0] ?? 0;
@@ -535,6 +566,9 @@ export function setupTelemetryEvents(
       // Build session info
       const sessionInfo = extractSessionInfo(currentSession, sessionNum);
 
+      // Build car info
+      const carInfo = extractCarInfo(currentSession);
+
       // Emit lap complete event
       const event: LapCompleteEvent = {
         trackId: currentTrackId,
@@ -554,6 +588,7 @@ export function setupTelemetryEvents(
         carState,
         tireData,
         sessionInfo,
+        carInfo,
       };
 
       // Update state for next lap
@@ -588,6 +623,46 @@ export function setupTelemetryEvents(
     }
     wasOnPitRoad = onPitRoad;
     lastIncidents = incidents;
+
+    // ─── Flag Detection (White/Checkered) ──────────────────────────────────
+
+    if (currentSessionType === 'Race' && currentSession) {
+      // White flag: SessionFlags bit 1 (0x02) — irsdk_white
+      const isWhiteFlag = (sessionFlags & 0x02) !== 0;
+      // Checkered flag: SessionFlags bit 0 (0x01) — irsdk_checkered
+      const isCheckeredFlag = (sessionFlags & 0x01) !== 0;
+
+      if (isWhiteFlag && !whiteFlagFired) {
+        whiteFlagFired = true;
+        logger.info(`${LOG_PREFIX} White flag detected — final lap`);
+        const event: WhiteFlagEvent = {
+          trackId: currentTrackId,
+          sessionId: currentSessionId,
+          lapNumber: lapNumber,
+          sessionType: currentSessionType,
+        };
+        whiteFlagCallbacks.forEach((cb) => cb(event));
+      }
+
+      if (isCheckeredFlag && !checkeredFlagFired) {
+        checkeredFlagFired = true;
+        logger.info(`${LOG_PREFIX} Checkered flag detected — race complete`);
+
+        // Get final position
+        const playerIdx = telemetry.PlayerCarIdx?.value?.[0] ?? 0;
+        const positions = telemetry.CarIdxPosition?.value ?? [];
+        const finalPosition = positions[playerIdx] ?? 0;
+
+        const event: CheckeredFlagEvent = {
+          trackId: currentTrackId,
+          sessionId: currentSessionId,
+          lapNumber: lapNumber,
+          sessionType: currentSessionType,
+          finalPosition: finalPosition > 0 ? finalPosition : undefined,
+        };
+        checkeredFlagCallbacks.forEach((cb) => cb(event));
+      }
+    }
 
     // ─── Section Boundary Detection ────────────────────────────────────────
 
@@ -669,6 +744,14 @@ export function setupTelemetryEvents(
       sessionChangeCallbacks.add(callback);
       return () => { sessionChangeCallbacks.delete(callback); };
     },
+    onWhiteFlag: (callback) => {
+      whiteFlagCallbacks.add(callback);
+      return () => { whiteFlagCallbacks.delete(callback); };
+    },
+    onCheckeredFlag: (callback) => {
+      checkeredFlagCallbacks.add(callback);
+      return () => { checkeredFlagCallbacks.delete(callback); };
+    },
     setSectionBoundaries: (boundaries) => {
       sectionBoundaries = boundaries;
       lastSectionIndex = -1;
@@ -682,6 +765,8 @@ export function setupTelemetryEvents(
       pitExitCallbacks.clear();
       sectionCrossingCallbacks.clear();
       sessionChangeCallbacks.clear();
+      whiteFlagCallbacks.clear();
+      checkeredFlagCallbacks.clear();
       telemetryBuffer.clear();
       logger.info(`${LOG_PREFIX} Stopped`);
     },

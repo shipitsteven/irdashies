@@ -62,6 +62,7 @@ export interface LapRaceContext {
   incidents: number;
   incident_limit: number;
   safety_car_out: boolean;
+  white_flag: boolean;
 }
 
 export interface LapCarState {
@@ -99,6 +100,14 @@ export interface LapSessionInfo {
   max_incidents: number;
 }
 
+export interface LapCarInfo {
+  car_id: number;
+  car_screen_name: string;
+  car_class_id: number;
+  car_class_short_name: string;
+  car_path: string;
+}
+
 export interface LapEvent {
   track_id: string;
   session_id: string;
@@ -114,6 +123,7 @@ export interface LapEvent {
   car_state?: LapCarState;
   tire_data?: LapTireData;
   session_info?: LapSessionInfo;
+  car_info?: LapCarInfo;
 }
 
 // ─── Section Event (input to service) ────────────────────────────────────────

@@ -60,6 +60,7 @@ export interface RaceContext {
   incidents: number;
   incidentLimit: number;
   safetyCarOut: boolean;
+  whiteFlag: boolean;
 }
 
 // ─── Car State ───────────────────────────────────────────────────────────────
@@ -120,6 +121,16 @@ export interface SessionInfoSnapshot {
   maxIncidents: number;
 }
 
+// ─── Car Info ─────────────────────────────────────────────────────────────────────
+
+export interface CarInfo {
+  carId: number;
+  carScreenName: string;
+  carClassId: number;
+  carClassShortName: string;
+  carPath: string;
+}
+
 // ─── Events ──────────────────────────────────────────────────────────────────
 
 export interface LapCompleteEvent {
@@ -141,6 +152,7 @@ export interface LapCompleteEvent {
   carState?: CarState;
   tireData?: TireData;
   sessionInfo?: SessionInfoSnapshot;
+  carInfo?: CarInfo;
 }
 
 export interface PitExitEvent {
@@ -165,6 +177,21 @@ export interface SessionChangeEvent {
   sessionType: SessionType;
 }
 
+export interface WhiteFlagEvent {
+  trackId: string;
+  sessionId: string;
+  lapNumber: number;
+  sessionType: SessionType;
+}
+
+export interface CheckeredFlagEvent {
+  trackId: string;
+  sessionId: string;
+  lapNumber: number;
+  sessionType: SessionType;
+  finalPosition?: number;
+}
+
 // ─── Configuration ───────────────────────────────────────────────────────────
 
 export interface TelemetryEventConfig {
@@ -181,6 +208,8 @@ export interface TelemetryEventEmitter {
   onPitExit: (callback: (event: PitExitEvent) => void) => () => void;
   onSectionCrossing: (callback: (event: SectionCrossingEvent) => void) => () => void;
   onSessionChange: (callback: (event: SessionChangeEvent) => void) => () => void;
+  onWhiteFlag: (callback: (event: WhiteFlagEvent) => void) => () => void;
+  onCheckeredFlag: (callback: (event: CheckeredFlagEvent) => void) => () => void;
   setSectionBoundaries: (boundaries: SectionBoundary[]) => void;
   stop: () => void;
 }

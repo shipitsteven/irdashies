@@ -8,6 +8,8 @@ import type {
   PitExitEvent,
   SectionCrossingEvent,
   SessionChangeEvent,
+  WhiteFlagEvent,
+  CheckeredFlagEvent,
 } from './telemetryEvents';
 import type {
   QuietEyeConfig,
@@ -259,6 +261,7 @@ export async function setupQuietEyeBridge(
             incidents: event.raceContext.incidents,
             incident_limit: event.raceContext.incidentLimit,
             safety_car_out: event.raceContext.safetyCarOut,
+            white_flag: event.raceContext.whiteFlag,
           }
         : undefined,
       car_state: event.carState
@@ -297,6 +300,15 @@ export async function setupQuietEyeBridge(
             session_sub_type: event.sessionInfo.sessionSubType,
             strength_of_field: event.sessionInfo.strengthOfField,
             max_incidents: event.sessionInfo.maxIncidents,
+          }
+        : undefined,
+      car_info: event.carInfo
+        ? {
+            car_id: event.carInfo.carId,
+            car_screen_name: event.carInfo.carScreenName,
+            car_class_id: event.carInfo.carClassId,
+            car_class_short_name: event.carInfo.carClassShortName,
+            car_path: event.carInfo.carPath,
           }
         : undefined,
     };
@@ -498,6 +510,61 @@ export async function setupQuietEyeBridge(
     await checkService();
   });
 
+  const unsubWhiteFlag = telemetryEvents.onWhiteFlag(async (event: WhiteFlagEvent) => {
+    if (!serviceAvailable) return;
+
+    logger.info(`${LOG_PREFIX} White flag — notifying service`);
+
+    // Notify the overlay directly for immediate UI feedback
+    overlayManager.publishMessage('quietEye:flag', {
+      type: 'white',
+      lapNumber: event.lapNumber,
+    });
+
+    // The service will handle white_flag=true in the next lap event's race_context
+    // No separate API call needed — the telemetry event emitter sets white_flag
+    // which gets picked up by extractRaceContext on the next lap complete
+  });
+
+  const unsubCheckeredFlag = telemetryEvents.onCheckeredFlag(async (event: CheckeredFlagEvent) => {
+    if (!serviceAvailable) return;
+
+    logger.info(`${LOG_PREFIX} Checkered flag — triggering post-race debrief`);
+
+    // Notify overlay
+    overlayManager.publishMessage('quietEye:flag', {
+      type: 'checkered',
+      lapNumber: event.lapNumber,
+      finalPosition: event.finalPosition,
+    });
+
+    // Call session-end endpoint for post-race debrief
+    let response: CoachingResponse | null = null;
+    let errorDetail = '';
+    try {
+      const res = await httpRequest(`${serviceUrl}/api/session-end`, 'POST', JSON.stringify({
+        race_context: {
+          position: event.finalPosition,
+        },
+      }));
+      if (res.status >= 200 && res.status < 300) {
+        response = JSON.parse(res.body) as CoachingResponse;
+      } else {
+        errorDetail = `HTTP ${res.status}: ${res.body.slice(0, 200)}`;
+      }
+    } catch (err) {
+      errorDetail = (err as Error).message;
+    }
+
+    if (response) {
+      logger.info(`${LOG_PREFIX} Post-race debrief: "${response.radio_message.slice(0, 80)}..."`);
+      overlayManager.publishMessage('quietEye:coaching', response);
+      coachingCallbacks.forEach((cb) => cb(response));
+    } else {
+      logger.warn(`${LOG_PREFIX} Post-race debrief failed: ${errorDetail}`);
+    }
+  });
+
   logger.info(`${LOG_PREFIX} Subscribed to telemetry event system`);
 
   // ─── Public Interface ────────────────────────────────────────────────────
@@ -518,6 +585,8 @@ export async function setupQuietEyeBridge(
       unsubPitExit();
       unsubSection();
       unsubSessionChange();
+      unsubWhiteFlag();
+      unsubCheckeredFlag();
       coachingCallbacks.clear();
       sectionCallbacks.clear();
       logger.info(`${LOG_PREFIX} Stopped`);
