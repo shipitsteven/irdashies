@@ -79,7 +79,17 @@ app.on('ready', async () => {
     if (bridge) {
       // Initialize generic telemetry event system
       const telemetryEvents = setupTelemetryEvents(bridge, {
-        resolveTrackId: (session) => resolveTrackIdViaService(session, quietEyeServiceUrl),
+        resolveTrackId: (session) => resolveTrackIdViaService(session, quietEyeServiceUrl, (sections) => {
+          // Push sections to overlay as soon as track resolves (before first lap)
+          telemetryEvents.setSectionBoundaries(sections);
+          const trackSections = sections.map((b) => ({
+            section_id: b.section_id,
+            name: b.section_id.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()),
+            start_pct: b.start_pct,
+            end_pct: b.end_pct,
+          }));
+          overlayManager.publishMessage('quietEye:trackSections', trackSections);
+        }),
       });
 
       // Initialize Quiet Eye as a consumer of telemetry events
@@ -95,7 +105,16 @@ app.on('ready', async () => {
           // Stop old event system and create new one for the new bridge
           telemetryEvents.stop();
           const newTelemetryEvents = setupTelemetryEvents(newBridge, {
-            resolveTrackId: (session) => resolveTrackIdViaService(session, quietEyeServiceUrl),
+            resolveTrackId: (session) => resolveTrackIdViaService(session, quietEyeServiceUrl, (sections) => {
+              newTelemetryEvents.setSectionBoundaries(sections);
+              const trackSections = sections.map((b) => ({
+                section_id: b.section_id,
+                name: b.section_id.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()),
+                start_pct: b.start_pct,
+                end_pct: b.end_pct,
+              }));
+              overlayManager.publishMessage('quietEye:trackSections', trackSections);
+            }),
           });
           await setupQuietEyeBridge(overlayManager, newTelemetryEvents, {
             enabled: true,

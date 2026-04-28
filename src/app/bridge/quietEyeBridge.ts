@@ -10,6 +10,7 @@ import type {
   SessionChangeEvent,
   WhiteFlagEvent,
   CheckeredFlagEvent,
+  SectionBoundary,
 } from './telemetryEvents';
 import type {
   QuietEyeConfig,
@@ -120,7 +121,8 @@ function httpGet(url: string): Promise<Record<string, unknown> | null> {
  */
 export async function resolveTrackIdViaService(
   session: Session,
-  serviceUrl: string
+  serviceUrl: string,
+  onSectionsLoaded?: (sections: SectionBoundary[]) => void
 ): Promise<string> {
   const info = session.WeekendInfo;
   const iracingTrackId = info.TrackID;
@@ -130,6 +132,10 @@ export async function resolveTrackIdViaService(
       const response = await httpGet(`${serviceUrl}/api/resolve-track/${iracingTrackId}`);
       if (response && response.track_id) {
         logger.info(`${LOG_PREFIX} Resolved TrackID ${iracingTrackId} -> ${response.track_id}`);
+        // If sections were returned, notify caller
+        if (response.sections && Array.isArray(response.sections) && response.sections.length > 0 && onSectionsLoaded) {
+          onSectionsLoaded(response.sections as SectionBoundary[]);
+        }
         return response.track_id as string;
       }
     } catch {
