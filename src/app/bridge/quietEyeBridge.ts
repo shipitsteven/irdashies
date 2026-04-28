@@ -324,6 +324,19 @@ export async function setupQuietEyeBridge(
       );
       overlayManager.publishMessage('quietEye:coaching', response);
 
+      // Update service status — LLM just responded successfully
+      if (response.behavior !== 'error' && response.behavior !== 'fallback_analysis') {
+        overlayManager.publishMessage('quietEye:serviceStatus', {
+          connected: true,
+          processing: false,
+          lastError: null,
+          trackLoaded: currentTrackId,
+          alienLoaded: true,
+          llmAvailable: true,
+          activeFallback: null,
+        });
+      }
+
       // Publish notifications based on behavior
       if (response.behavior === 'error') {
         overlayManager.publishMessage('quietEye:notification', {
@@ -349,6 +362,16 @@ export async function setupQuietEyeBridge(
       coachingCallbacks.forEach((cb) => cb(response));
     } else {
       const errorMsg = errorDetail || 'No response from service';
+      // Update status — LLM/service failed
+      overlayManager.publishMessage('quietEye:serviceStatus', {
+        connected: serviceAvailable,
+        processing: false,
+        lastError: errorMsg,
+        trackLoaded: currentTrackId,
+        alienLoaded: true,
+        llmAvailable: false,
+        activeFallback: 'error',
+      });
       const errorResponse: CoachingResponse = {
         lap_number: event.lapNumber,
         radio_message: `⚠️ Coaching error: ${errorMsg}`,
