@@ -53,6 +53,8 @@ export interface LapRaceContext {
   total_cars_in_class: number;
   gap_ahead: number;
   gap_behind: number;
+  ahead_last_lap: number;
+  behind_last_lap: number;
   laps_remaining: number;
   time_remaining: number;
   race_duration_minutes: number;

@@ -51,6 +51,8 @@ export interface RaceContext {
   totalCarsInClass: number;
   gapAhead: number;
   gapBehind: number;
+  aheadLastLap: number;
+  behindLastLap: number;
   lapsRemaining: number;
   timeRemaining: number;
   raceDurationMinutes: number;

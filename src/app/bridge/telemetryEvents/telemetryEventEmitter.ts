@@ -105,20 +105,23 @@ function calculateGaps(
   telemetry: Telemetry,
   playerIdx: number,
   playerClassId: number
-): { gapAhead: number; gapBehind: number } {
+): { gapAhead: number; gapBehind: number; aheadLastLap: number; behindLastLap: number } {
   const estTimes = telemetry.CarIdxEstTime?.value ?? [];
   const classIds = telemetry.CarIdxClass?.value ?? [];
   const positions = telemetry.CarIdxClassPosition?.value ?? [];
+  const lastLapTimes = telemetry.CarIdxLastLapTime?.value ?? [];
 
   const playerEstTime = estTimes[playerIdx] ?? 0;
   const playerClassPos = positions[playerIdx] ?? 0;
 
   if (playerEstTime <= 0 || playerClassPos <= 0) {
-    return { gapAhead: 0, gapBehind: 0 };
+    return { gapAhead: 0, gapBehind: 0, aheadLastLap: 0, behindLastLap: 0 };
   }
 
   let gapAhead = 0;
   let gapBehind = 0;
+  let aheadLastLap = 0;
+  let behindLastLap = 0;
 
   // Find car immediately ahead (classPosition = playerClassPos - 1)
   // and car immediately behind (classPosition = playerClassPos + 1) in same class
@@ -133,13 +136,17 @@ function calculateGaps(
     if (otherPos === playerClassPos - 1) {
       // Car ahead
       gapAhead = playerEstTime - otherEstTime;
+      const lapTime = lastLapTimes[i] ?? 0;
+      aheadLastLap = lapTime > 0 ? lapTime : 0;
     } else if (otherPos === playerClassPos + 1) {
       // Car behind
       gapBehind = otherEstTime - playerEstTime;
+      const lapTime = lastLapTimes[i] ?? 0;
+      behindLastLap = lapTime > 0 ? lapTime : 0;
     }
   }
 
-  return { gapAhead, gapBehind };
+  return { gapAhead, gapBehind, aheadLastLap, behindLastLap };
 }
 
 // ─── Setup Function ──────────────────────────────────────────────────────────
@@ -253,7 +260,7 @@ export function setupTelemetryEvents(
     }
 
     // Gaps
-    const { gapAhead, gapBehind } = calculateGaps(telemetry, playerIdx, playerClassId);
+    const { gapAhead, gapBehind, aheadLastLap, behindLastLap } = calculateGaps(telemetry, playerIdx, playerClassId);
 
     // Session time/laps remaining
     const lapsRemaining = telemetry.SessionLapsRemainEx?.value?.[0] ?? 0;
@@ -291,6 +298,8 @@ export function setupTelemetryEvents(
       totalCarsInClass,
       gapAhead,
       gapBehind,
+      aheadLastLap,
+      behindLastLap,
       lapsRemaining,
       timeRemaining,
       raceDurationMinutes,

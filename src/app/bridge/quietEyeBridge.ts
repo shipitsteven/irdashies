@@ -250,6 +250,8 @@ export async function setupQuietEyeBridge(
             total_cars_in_class: event.raceContext.totalCarsInClass,
             gap_ahead: event.raceContext.gapAhead,
             gap_behind: event.raceContext.gapBehind,
+            ahead_last_lap: event.raceContext.aheadLastLap,
+            behind_last_lap: event.raceContext.behindLastLap,
             laps_remaining: event.raceContext.lapsRemaining,
             time_remaining: event.raceContext.timeRemaining,
             race_duration_minutes: event.raceContext.raceDurationMinutes,
