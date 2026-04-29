@@ -84,22 +84,68 @@ function LlmSettingsTab() {
   });
 
   const [showKey, setShowKey] = useState(false);
-  const [testResult, setTestResult] = useState<TestResult>({ status: 'idle' });
-  const [models, setModels] = useState<ModelOption[]>(HARDCODED_GEMINI_MODELS);
+  const [testResult, setTestResult] = useState<TestResult>(() => {
+    // Restore verified state from localStorage
+    try {
+      const stored = localStorage.getItem('quietEyeLlmVerified');
+      if (stored) return JSON.parse(stored) as TestResult;
+    } catch { /* ignore */ }
+    return { status: 'idle' };
+  });
+  const [models, setModels] = useState<ModelOption[]>(() => {
+    // Restore cached models from localStorage
+    try {
+      const stored = localStorage.getItem('quietEyeLlmModels');
+      if (stored) {
+        const parsed = JSON.parse(stored) as ModelOption[];
+        if (parsed.length > 0) return parsed;
+      }
+    } catch { /* ignore */ }
+    return HARDCODED_GEMINI_MODELS;
+  });
   const [keyError, setKeyError] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'error'>('idle');
+
+  const isVerified = testResult.status === 'success';
 
   // Persist LLM config to localStorage on change
   useEffect(() => {
     localStorage.setItem('quietEyeLlmConfig', JSON.stringify(llmConfig));
   }, [llmConfig]);
 
+  // Persist verified state + models to localStorage
+  useEffect(() => {
+    if (testResult.status === 'success') {
+      localStorage.setItem('quietEyeLlmVerified', JSON.stringify(testResult));
+    }
+  }, [testResult]);
+  useEffect(() => {
+    if (models !== HARDCODED_GEMINI_MODELS) {
+      localStorage.setItem('quietEyeLlmModels', JSON.stringify(models));
+    }
+  }, [models]);
+
+  const resetVerification = useCallback(() => {
+    setTestResult({ status: 'idle' });
+    setModels(HARDCODED_GEMINI_MODELS);
+    localStorage.removeItem('quietEyeLlmVerified');
+    localStorage.removeItem('quietEyeLlmModels');
+    setSaveStatus('idle');
+  }, []);
+
   const updateConfig = useCallback(
     (patch: Partial<LlmConfig>) => {
-      setLlmConfig((prev) => ({ ...prev, ...patch }));
-      // Clear test result when config changes
-      setTestResult({ status: 'idle' });
-      setSaveStatus('idle');
+      setLlmConfig((prev) => {
+        // If provider or key changed, reset verification
+        if (patch.provider !== undefined || patch.apiKey !== undefined) {
+          setTestResult({ status: 'idle' });
+          setModels(HARDCODED_GEMINI_MODELS);
+          localStorage.removeItem('quietEyeLlmVerified');
+          localStorage.removeItem('quietEyeLlmModels');
+        }
+        setSaveStatus('idle');
+        return { ...prev, ...patch };
+      });
     },
     []
   );
@@ -259,11 +305,13 @@ function LlmSettingsTab() {
         setTimeout(() => setSaveStatus('idle'), 3000);
       } else {
         setSaveStatus('error');
+        resetVerification();
       }
     } catch {
       setSaveStatus('error');
+      resetVerification();
     }
-  }, [llmConfig]);
+  }, [llmConfig, resetVerification]);
 
   // ─── Render ─────────────────────────────────────────────────────────
 
@@ -335,33 +383,45 @@ function LlmSettingsTab() {
         <div className="space-y-3">
           {/* Verify button */}
           <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={handleVerify}
-              disabled={
-                testResult.status === 'testing' ||
-                (!llmConfig.apiKey && llmConfig.provider !== 'ollama')
-              }
-              className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                testResult.status === 'testing'
-                  ? 'bg-slate-600 text-slate-400 cursor-wait'
-                  : 'bg-blue-600 hover:bg-blue-500 text-white'
-              }`}
-            >
-              {testResult.status === 'testing' ? 'Verifying...' : 'Verify'}
-            </button>
+            {isVerified ? (
+              <>
+                <span className="text-sm text-green-400">
+                  ✅ {testResult.message}
+                  {testResult.responseMs != null &&
+                    ` (${testResult.responseMs}ms)`}
+                </span>
+                <button
+                  type="button"
+                  onClick={resetVerification}
+                  className="px-3 py-1 rounded-md text-xs text-slate-400 hover:text-slate-200 border border-slate-600 hover:border-slate-500 transition-colors"
+                >
+                  Re-verify
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={handleVerify}
+                  disabled={
+                    testResult.status === 'testing' ||
+                    (!llmConfig.apiKey && llmConfig.provider !== 'ollama')
+                  }
+                  className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                    testResult.status === 'testing'
+                      ? 'bg-slate-600 text-slate-400 cursor-wait'
+                      : 'bg-blue-600 hover:bg-blue-500 text-white'
+                  }`}
+                >
+                  {testResult.status === 'testing' ? 'Verifying...' : 'Verify'}
+                </button>
 
-            {testResult.status === 'success' && (
-              <span className="text-sm text-green-400">
-                ✅ {testResult.message}
-                {testResult.responseMs != null &&
-                  ` (${testResult.responseMs}ms)`}
-              </span>
-            )}
-            {testResult.status === 'error' && (
-              <span className="text-sm text-red-400">
-                ❌ {testResult.message}
-              </span>
+                {testResult.status === 'error' && (
+                  <span className="text-sm text-red-400">
+                    ❌ {testResult.message}
+                  </span>
+                )}
+              </>
             )}
           </div>
 
