@@ -67,7 +67,20 @@ app.on('ready', async () => {
   ipcMain.handle('getComponentServerPort', () => getComponentServerPort());
 
   // Quiet Eye service token IPC — renderer uses this for authenticated API calls
-  const serviceTokenPath = path.resolve(__dirname, '..', 'data', '.service_token');
+  function findServiceTokenPath(): string {
+    const candidates = [
+      path.resolve(__dirname, '..', 'data', '.service_token'),
+      path.join(process.env.HOME || process.env.USERPROFILE || '', 'iOS', 'quiet-eye', 'quiet-eye', 'data', '.service_token'),
+      path.join(process.env.HOME || process.env.USERPROFILE || '', 'Documents', 'quiet-eye', 'data', '.service_token'),
+    ];
+    for (const p of candidates) {
+      try {
+        if (fs.existsSync(p)) return p;
+      } catch { /* skip */ }
+    }
+    return candidates[0];
+  }
+  const serviceTokenPath = findServiceTokenPath();
   ipcMain.handle('quietEye:getServiceToken', () => {
     try {
       return fs.readFileSync(serviceTokenPath, 'utf8').trim();

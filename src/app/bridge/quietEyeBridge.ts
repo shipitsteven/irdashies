@@ -35,10 +35,38 @@ const SERVICE_TIMEOUT_MS = 60_000; // LLM coaching calls can take 30-45s via Bed
 /**
  * Path to the coaching service's data directory.
  * The service writes .service_token here on startup.
+ * Check common locations: env var, sibling dir, or well-known paths.
  */
-const SERVICE_DATA_DIR = path.resolve(
-  __dirname, '..', '..', '..', '..', 'data'
-);
+function resolveServiceDataDir(): string {
+  // 1. Explicit env var
+  if (process.env.QUIET_EYE_DATA_DIR) {
+    return process.env.QUIET_EYE_DATA_DIR;
+  }
+  // 2. Check well-known paths
+  const candidates = [
+    path.resolve(__dirname, '..', '..', '..', '..', 'data'),
+    path.join(process.env.HOME || process.env.USERPROFILE || '', 'iOS', 'quiet-eye', 'quiet-eye', 'data'),
+    path.join(process.env.HOME || process.env.USERPROFILE || '', 'Documents', 'quiet-eye', 'data'),
+  ];
+  // On Windows, also check common locations
+  if (process.platform === 'win32') {
+    candidates.push(
+      path.join(process.env.USERPROFILE || '', 'Documents', 'quiet-eye', 'data'),
+    );
+  }
+  for (const dir of candidates) {
+    try {
+      if (fs.existsSync(path.join(dir, '.service_token'))) {
+        logger.info(`${LOG_PREFIX} Found service token at ${dir}`);
+        return dir;
+      }
+    } catch { /* skip */ }
+  }
+  // Fallback to first candidate
+  return candidates[0];
+}
+
+const SERVICE_DATA_DIR = resolveServiceDataDir();
 
 let _cachedToken: string | null = null;
 
