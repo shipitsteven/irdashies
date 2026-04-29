@@ -197,11 +197,18 @@ function LlmSettingsTab() {
 
   const fetchModels = useCallback(async (token?: string | null) => {
     try {
-      const headers: Record<string, string> = {};
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
       const res = await fetch('http://localhost:8878/api/config/models', {
+        method: 'POST',
         headers,
+        body: JSON.stringify({
+          api_key: llmConfig.apiKey,
+          provider: llmConfig.provider,
+        }),
       });
       if (res.ok) {
         const data = await res.json();
@@ -217,7 +224,7 @@ function LlmSettingsTab() {
     } catch {
       // Keep hardcoded fallback
     }
-  }, []);
+  }, [llmConfig.apiKey, llmConfig.provider]);
 
   // ─── Save Config ────────────────────────────────────────────────────
 
