@@ -17,5 +17,8 @@ declare global {
     referenceLapsBridge: ReferenceLapBridge;
     logBridge: LogBridge;
     keybindingsBridge: KeybindingsBridge;
+    electronAPI?: {
+      getServiceToken: () => Promise<string | null>;
+    };
   }
 }

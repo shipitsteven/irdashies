@@ -1,12 +1,18 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { BaseSettingsSection } from '../components/BaseSettingsSection';
-import type { CoachingOverlayConfig, SettingsTabType } from '@irdashies/types';
+import type {
+  CoachingOverlayConfig,
+  SettingsTabType,
+  LlmConfig,
+  LlmProvider,
+} from '@irdashies/types';
 import { getWidgetDefaultConfig } from '@irdashies/types';
 import { useDashboard } from '@irdashies/context';
 import { SettingsSection } from '../components/SettingSection';
 import { SettingToggleRow } from '../components/SettingToggleRow';
 import { SettingNumberRow } from '../components/SettingNumberRow';
 import { SettingSliderRow } from '../components/SettingSliderRow';
+import { SettingSelectRow } from '../components/SettingSelectRow';
 import { SessionVisibility } from '../components/SessionVisibility';
 import { TabButton } from '../components/TabButton';
 
@@ -14,11 +20,418 @@ const SETTING_ID = 'coaching';
 
 const defaultConfig = getWidgetDefaultConfig('coaching');
 
+// ─── LLM Config defaults & helpers ──────────────────────────────────────────
+
+const DEFAULT_LLM_CONFIG: LlmConfig = {
+  provider: 'gemini',
+  apiKey: '',
+  model: 'gemini-2.0-flash',
+};
+
+const PROVIDER_OPTIONS: { label: string; value: LlmProvider }[] = [
+  { label: 'Google Gemini', value: 'gemini' },
+  { label: 'OpenAI', value: 'openai' },
+  { label: 'OpenAI-compatible', value: 'openai-compatible' },
+  { label: 'Ollama (local)', value: 'ollama' },
+];
+
+const HARDCODED_GEMINI_MODELS = [
+  { label: 'Gemini 2.0 Flash', value: 'gemini-2.0-flash' },
+  { label: 'Gemini 2.5 Flash', value: 'gemini-2.5-flash' },
+  { label: 'Gemini 2.5 Pro', value: 'gemini-2.5-pro' },
+];
+
+/** Gemini keys start with AIza and are 39 chars */
+function isValidGeminiKey(key: string): boolean {
+  return /^AIza[A-Za-z0-9_-]{35}$/.test(key);
+}
+
+/** Redact an API key to first 4 + last 4 chars */
+function redactKey(key: string): string {
+  if (key.length <= 8) return '****';
+  return key.slice(0, 4) + '...' + key.slice(-4);
+}
+
+// ─── Types ──────────────────────────────────────────────────────────────────
+
 interface CoachingWidgetSettings {
   id: string;
   enabled: boolean;
   config: CoachingOverlayConfig;
 }
+
+interface ModelOption {
+  label: string;
+  value: string;
+}
+
+interface TestResult {
+  status: 'idle' | 'testing' | 'success' | 'error';
+  message?: string;
+  responseMs?: number;
+}
+
+// ─── LLM Settings Tab Component ─────────────────────────────────────────────
+
+function LlmSettingsTab() {
+  // Load persisted LLM config from localStorage
+  const [llmConfig, setLlmConfig] = useState<LlmConfig>(() => {
+    try {
+      const stored = localStorage.getItem('quietEyeLlmConfig');
+      if (stored) return { ...DEFAULT_LLM_CONFIG, ...JSON.parse(stored) };
+    } catch { /* ignore */ }
+    return DEFAULT_LLM_CONFIG;
+  });
+
+  const [showKey, setShowKey] = useState(false);
+  const [testResult, setTestResult] = useState<TestResult>({ status: 'idle' });
+  const [models, setModels] = useState<ModelOption[]>(HARDCODED_GEMINI_MODELS);
+  const [keyError, setKeyError] = useState<string | null>(null);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'error'>('idle');
+
+  // Persist LLM config to localStorage on change
+  useEffect(() => {
+    localStorage.setItem('quietEyeLlmConfig', JSON.stringify(llmConfig));
+  }, [llmConfig]);
+
+  const updateConfig = useCallback(
+    (patch: Partial<LlmConfig>) => {
+      setLlmConfig((prev) => ({ ...prev, ...patch }));
+      // Clear test result when config changes
+      setTestResult({ status: 'idle' });
+      setSaveStatus('idle');
+    },
+    []
+  );
+
+  // ─── Key Validation ─────────────────────────────────────────────────
+
+  const validateKey = useCallback(
+    (key: string) => {
+      if (!key) {
+        setKeyError(null);
+        return;
+      }
+      if (llmConfig.provider === 'gemini' && !isValidGeminiKey(key)) {
+        setKeyError(
+          "API key format doesn't look right — Gemini keys start with AIza and are 39 characters"
+        );
+      } else {
+        setKeyError(null);
+      }
+    },
+    [llmConfig.provider]
+  );
+
+  // ─── Test Connection ────────────────────────────────────────────────
+
+  const handleVerify = useCallback(async () => {
+    if (!llmConfig.apiKey) {
+      setTestResult({ status: 'error', message: 'Please enter your API key' });
+      return;
+    }
+    if (
+      llmConfig.provider === 'gemini' &&
+      !isValidGeminiKey(llmConfig.apiKey)
+    ) {
+      setTestResult({
+        status: 'error',
+        message:
+          "API key format doesn't look right — Gemini keys start with AIza",
+      });
+      return;
+    }
+
+    setTestResult({ status: 'testing' });
+
+    try {
+      const token = await window.electronAPI?.getServiceToken?.();
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const res = await fetch('http://localhost:8878/api/config/test-llm', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          provider: llmConfig.provider,
+          api_key: llmConfig.apiKey,
+          model: llmConfig.model,
+          base_url: llmConfig.baseUrl,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (res.ok && data.status === 'ok') {
+        setTestResult({
+          status: 'success',
+          message: `Connected! Model: ${data.model} ✓`,
+          responseMs: data.response_ms,
+        });
+        // Fetch dynamic model list on success
+        fetchModels(token);
+      } else if (res.status === 401 || res.status === 403) {
+        setTestResult({
+          status: 'error',
+          message:
+            'API key was rejected — check that it\'s correct and has Generative Language API enabled',
+        });
+      } else {
+        setTestResult({
+          status: 'error',
+          message: data.error || `Verification failed (HTTP ${res.status})`,
+        });
+      }
+    } catch {
+      setTestResult({
+        status: 'error',
+        message:
+          "Couldn't reach the coaching service — is it running?",
+      });
+    }
+  }, [llmConfig]);
+
+  // ─── Fetch Models ───────────────────────────────────────────────────
+
+  const fetchModels = useCallback(async (token?: string | null) => {
+    try {
+      const headers: Record<string, string> = {};
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const res = await fetch('http://localhost:8878/api/config/models', {
+        headers,
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.models && data.models.length > 0) {
+          setModels(
+            data.models.map((m: { id: string; name: string }) => ({
+              label: m.name,
+              value: m.id,
+            }))
+          );
+        }
+      }
+    } catch {
+      // Keep hardcoded fallback
+    }
+  }, []);
+
+  // ─── Save Config ────────────────────────────────────────────────────
+
+  const handleSave = useCallback(async () => {
+    if (!llmConfig.apiKey) {
+      setSaveStatus('error');
+      return;
+    }
+
+    try {
+      const token = await window.electronAPI?.getServiceToken?.();
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const res = await fetch('http://localhost:8878/api/config/llm', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          provider: llmConfig.provider,
+          api_key: llmConfig.apiKey,
+          model: llmConfig.model,
+          base_url: llmConfig.baseUrl,
+          max_tokens: llmConfig.maxTokens,
+          timeout: llmConfig.timeout,
+        }),
+      });
+
+      if (res.ok) {
+        setSaveStatus('saved');
+        setTimeout(() => setSaveStatus('idle'), 3000);
+      } else {
+        setSaveStatus('error');
+      }
+    } catch {
+      setSaveStatus('error');
+    }
+  }, [llmConfig]);
+
+  // ─── Render ─────────────────────────────────────────────────────────
+
+  return (
+    <>
+      <SettingsSection title="LLM Provider">
+        <SettingSelectRow
+          title="Provider"
+          description="Select your LLM provider for coaching"
+          value={llmConfig.provider}
+          options={PROVIDER_OPTIONS}
+          onChange={(v) => {
+            updateConfig({ provider: v as LlmProvider });
+            setModels(HARDCODED_GEMINI_MODELS);
+          }}
+        />
+      </SettingsSection>
+
+      <SettingsSection title="API Key">
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="max-w-[70%]">
+              <h4 className="text-md font-medium text-slate-300">API Key</h4>
+              <p className="text-sm text-slate-500 mt-1">
+                {llmConfig.provider === 'gemini'
+                  ? 'Get a free key from Google AI Studio (aistudio.google.com)'
+                  : llmConfig.provider === 'ollama'
+                    ? 'No API key needed for local Ollama'
+                    : 'Your API key for the selected provider'}
+              </p>
+            </div>
+          </div>
+
+          {llmConfig.provider !== 'ollama' && (
+            <div className="flex gap-2 items-center">
+              <div className="relative flex-1">
+                <input
+                  type={showKey ? 'text' : 'password'}
+                  value={llmConfig.apiKey}
+                  onChange={(e) => {
+                    updateConfig({ apiKey: e.target.value });
+                    validateKey(e.target.value);
+                  }}
+                  placeholder={
+                    llmConfig.provider === 'gemini'
+                      ? 'AIza...'
+                      : 'sk-...'
+                  }
+                  className="w-full rounded border border-gray-600 bg-gray-700 p-2 text-slate-300 pr-16 font-mono text-sm"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowKey(!showKey)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-slate-400 hover:text-slate-200"
+                >
+                  {showKey ? 'Hide' : 'Show'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {keyError && (
+            <p className="text-sm text-amber-400">{keyError}</p>
+          )}
+        </div>
+      </SettingsSection>
+
+      <SettingsSection title="Verify & Model">
+        <div className="space-y-3">
+          {/* Verify button */}
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={handleVerify}
+              disabled={
+                testResult.status === 'testing' ||
+                (!llmConfig.apiKey && llmConfig.provider !== 'ollama')
+              }
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                testResult.status === 'testing'
+                  ? 'bg-slate-600 text-slate-400 cursor-wait'
+                  : 'bg-blue-600 hover:bg-blue-500 text-white'
+              }`}
+            >
+              {testResult.status === 'testing' ? 'Verifying...' : 'Verify'}
+            </button>
+
+            {testResult.status === 'success' && (
+              <span className="text-sm text-green-400">
+                ✅ {testResult.message}
+                {testResult.responseMs != null &&
+                  ` (${testResult.responseMs}ms)`}
+              </span>
+            )}
+            {testResult.status === 'error' && (
+              <span className="text-sm text-red-400">
+                ❌ {testResult.message}
+              </span>
+            )}
+          </div>
+
+          {/* Model dropdown */}
+          <SettingSelectRow
+            title="Model"
+            description={
+              testResult.status === 'success'
+                ? 'Models loaded from your API key'
+                : 'Verify your key to load available models'
+            }
+            value={llmConfig.model}
+            options={models}
+            onChange={(v) => updateConfig({ model: v })}
+          />
+        </div>
+      </SettingsSection>
+
+      {/* Base URL — only for openai-compatible */}
+      {llmConfig.provider === 'openai-compatible' && (
+        <SettingsSection title="Endpoint">
+          <div className="space-y-2">
+            <div className="max-w-[70%]">
+              <h4 className="text-md font-medium text-slate-300">
+                Base URL
+              </h4>
+              <p className="text-sm text-slate-500 mt-1">
+                OpenAI-compatible API endpoint (e.g.
+                http://localhost:8899/v1)
+              </p>
+            </div>
+            <input
+              type="text"
+              value={llmConfig.baseUrl ?? ''}
+              onChange={(e) => updateConfig({ baseUrl: e.target.value })}
+              placeholder="http://localhost:8899/v1"
+              className="w-full rounded border border-gray-600 bg-gray-700 p-2 text-slate-300 font-mono text-sm"
+            />
+          </div>
+        </SettingsSection>
+      )}
+
+      {/* Save button */}
+      <div className="flex items-center gap-3 pt-2">
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={!llmConfig.apiKey && llmConfig.provider !== 'ollama'}
+          className="px-4 py-2 rounded-md text-sm font-medium bg-green-600 hover:bg-green-500 text-white transition-colors disabled:bg-slate-600 disabled:text-slate-400"
+        >
+          Save LLM Config
+        </button>
+        {saveStatus === 'saved' && (
+          <span className="text-sm text-green-400">✅ Saved</span>
+        )}
+        {saveStatus === 'error' && (
+          <span className="text-sm text-red-400">
+            ❌ Save failed — is the coaching service running?
+          </span>
+        )}
+      </div>
+
+      <div className="text-sm text-slate-500 px-1 pt-2">
+        <p>
+          Your API key is stored locally on this machine and only sent to
+          the coaching service at{' '}
+          <code className="text-slate-400 bg-slate-700 px-1 rounded">
+            localhost:8878
+          </code>
+          .
+        </p>
+      </div>
+    </>
+  );
+}
+
+// ─── Main Component ─────────────────────────────────────────────────────────
 
 export const CoachingSettings = () => {
   const { currentDashboard } = useDashboard();
@@ -76,6 +489,13 @@ export const CoachingSettings = () => {
               setActiveTab={setActiveTab}
             >
               Visibility
+            </TabButton>
+            <TabButton
+              id="llm"
+              activeTab={activeTab}
+              setActiveTab={setActiveTab}
+            >
+              LLM
             </TabButton>
           </div>
 
@@ -188,6 +608,9 @@ export const CoachingSettings = () => {
               />
             </SettingsSection>
           )}
+
+          {/* LLM TAB */}
+          {activeTab === 'llm' && <LlmSettingsTab />}
         </div>
       )}
     </BaseSettingsSection>

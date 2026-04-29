@@ -606,7 +606,8 @@ export type SettingsTabType =
   | 'footer'
   | 'history'
   | 'telemetry'
-  | 'dashboard';
+  | 'dashboard'
+  | 'llm';
 
 /** Available widgets for the Fuel Calculator */
 export type FuelWidgetType =

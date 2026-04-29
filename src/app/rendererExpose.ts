@@ -31,4 +31,9 @@ export function exposeInMainWorld() {
   };
 
   contextBridge.exposeInMainWorld('pitLaneBridge', pitLaneBridge);
+
+  // Quiet Eye service token for authenticated API calls from renderer
+  contextBridge.exposeInMainWorld('electronAPI', {
+    getServiceToken: () => ipcRenderer.invoke('quietEye:getServiceToken'),
+  });
 }

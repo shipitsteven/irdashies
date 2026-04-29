@@ -1,4 +1,6 @@
 import { app, ipcMain } from 'electron';
+import fs from 'node:fs';
+import path from 'node:path';
 import log from './app/logger';
 import {
   iRacingSDKSetup,
@@ -63,6 +65,16 @@ app.on('ready', async () => {
   await startComponentServer(bridge, dashboardBridge);
 
   ipcMain.handle('getComponentServerPort', () => getComponentServerPort());
+
+  // Quiet Eye service token IPC — renderer uses this for authenticated API calls
+  const serviceTokenPath = path.resolve(__dirname, '..', 'data', '.service_token');
+  ipcMain.handle('quietEye:getServiceToken', () => {
+    try {
+      return fs.readFileSync(serviceTokenPath, 'utf8').trim();
+    } catch {
+      return null;
+    }
+  });
 
   overlayManager.createOverlays(dashboard);
 

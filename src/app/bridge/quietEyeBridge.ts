@@ -1,4 +1,6 @@
 import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
 import type { Session } from '@irdashies/types';
 import { OverlayManager } from '../overlayManager';
 import logger from '../logger';
@@ -28,34 +30,80 @@ const LOG_PREFIX = '[QuietEyeBridge]';
 const HEALTH_CHECK_INTERVAL_MS = 10_000;
 const SERVICE_TIMEOUT_MS = 60_000; // LLM coaching calls can take 30-45s via Bedrock tunnel
 
+// ─── Service Token Management ────────────────────────────────────────────────
+
+/**
+ * Path to the coaching service's data directory.
+ * The service writes .service_token here on startup.
+ */
+const SERVICE_DATA_DIR = path.resolve(
+  __dirname, '..', '..', '..', '..', 'data'
+);
+
+let _cachedToken: string | null = null;
+
+function readServiceToken(): string | null {
+  try {
+    const tokenPath = path.join(SERVICE_DATA_DIR, '.service_token');
+    const token = fs.readFileSync(tokenPath, 'utf8').trim();
+    _cachedToken = token;
+    return token;
+  } catch {
+    return _cachedToken; // Return last known token if file is temporarily unavailable
+  }
+}
+
+/** Refresh the cached token by re-reading the file */
+function refreshToken(): string | null {
+  _cachedToken = null;
+  return readServiceToken();
+}
+
 // ─── HTTP Helpers (Node built-in) ────────────────────────────────────────────
 
 function httpRequest(
   url: string,
   method: 'GET' | 'POST',
-  body?: string
+  body?: string,
+  _retry = true
 ): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
+    const token = readServiceToken();
+    const baseHeaders: Record<string, string | number> = {};
+    if (token) baseHeaders['Authorization'] = `Bearer ${token}`;
+    if (body) {
+      baseHeaders['Content-Type'] = 'application/json';
+      baseHeaders['Content-Length'] = Buffer.byteLength(body);
+    }
+
     const options: http.RequestOptions = {
       hostname: parsed.hostname,
       port: parsed.port,
       path: parsed.pathname + parsed.search,
       method,
       timeout: SERVICE_TIMEOUT_MS,
-      headers: body
-        ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
-        : undefined,
+      headers: baseHeaders,
     };
 
     const req = http.request(options, (res) => {
       const chunks: Buffer[] = [];
       res.on('data', (chunk: Buffer) => chunks.push(chunk));
       res.on('end', () => {
-        resolve({
-          status: res.statusCode ?? 0,
-          body: Buffer.concat(chunks).toString('utf8'),
-        });
+        const status = res.statusCode ?? 0;
+        const resBody = Buffer.concat(chunks).toString('utf8');
+
+        // On 401, refresh token and retry once
+        if (status === 401 && _retry) {
+          const newToken = refreshToken();
+          if (newToken && newToken !== token) {
+            logger.info(`${LOG_PREFIX} Got 401, re-read token and retrying`);
+            httpRequest(url, method, body, false).then(resolve, reject);
+            return;
+          }
+        }
+
+        resolve({ status, body: resBody });
       });
     });
 
@@ -100,7 +148,30 @@ async function getJson<T>(url: string): Promise<T | null> {
 
 function httpGet(url: string): Promise<Record<string, unknown> | null> {
   return new Promise((resolve) => {
-    const req = http.get(url, { timeout: 3000 }, (res) => {
+    const token = readServiceToken();
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const req = http.get(url, { timeout: 3000, headers }, (res) => {
+      // On 401, refresh token and retry once
+      if (res.statusCode === 401) {
+        const newToken = refreshToken();
+        if (newToken && newToken !== token) {
+          const retryHeaders: Record<string, string> = { 'Authorization': `Bearer ${newToken}` };
+          const retryReq = http.get(url, { timeout: 3000, headers: retryHeaders }, (retryRes) => {
+            let data = '';
+            retryRes.on('data', (chunk: Buffer) => (data += chunk.toString()));
+            retryRes.on('end', () => {
+              try { resolve(JSON.parse(data)); } catch { resolve(null); }
+            });
+          });
+          retryReq.on('error', () => resolve(null));
+          retryReq.on('timeout', () => { retryReq.destroy(); resolve(null); });
+          return;
+        }
+        resolve(null);
+        return;
+      }
       let data = '';
       res.on('data', (chunk: Buffer) => (data += chunk.toString()));
       res.on('end', () => {
@@ -172,6 +243,37 @@ export async function setupQuietEyeBridge(
   const coachingCallbacks = new Set<(r: CoachingResponse) => void>();
   const sectionCallbacks = new Set<(f: SectionFeedback) => void>();
 
+  // ─── LLM Config Push ──────────────────────────────────────────────────
+
+  async function pushLlmConfig(): Promise<void> {
+    try {
+      const stored = (() => {
+        // Try to read from a well-known config location
+        // The renderer persists to localStorage; main process can read from a shared file
+        const configPath = path.join(SERVICE_DATA_DIR, '..', 'quiet-eye-llm.json');
+        try {
+          return JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        } catch {
+          return null;
+        }
+      })();
+
+      if (!stored || !stored.provider || !stored.apiKey) return;
+
+      await postJson(`${serviceUrl}/api/config/llm`, {
+        provider: stored.provider,
+        api_key: stored.apiKey,
+        model: stored.model,
+        base_url: stored.baseUrl,
+        max_tokens: stored.maxTokens,
+        timeout: stored.timeout,
+      });
+      logger.info(`${LOG_PREFIX} Pushed LLM config to service (provider=${stored.provider})`);
+    } catch (err) {
+      logger.debug(`${LOG_PREFIX} LLM config push failed: ${(err as Error).message}`);
+    }
+  }
+
   // ─── Service Health Check ────────────────────────────────────────────────
 
   async function checkService(): Promise<void> {
@@ -181,6 +283,8 @@ export async function setupQuietEyeBridge(
 
     if (serviceAvailable && !wasAvailable) {
       logger.info(`${LOG_PREFIX} Service connected`);
+      // Push LLM config on reconnect
+      pushLlmConfig();
     } else if (!serviceAvailable && wasAvailable) {
       logger.warn(`${LOG_PREFIX} Service unavailable`);
     }

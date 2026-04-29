@@ -82,6 +82,19 @@ export interface ServiceStatus {
   activeFallback: string | null; // 'analysis_only' | 'no_alien' | null
 }
 
+// === LLM Provider Config (BYOK) ===
+
+export type LlmProvider = 'gemini' | 'openai' | 'openai-compatible' | 'ollama';
+
+export interface LlmConfig {
+  provider: LlmProvider;
+  apiKey: string;
+  model: string;
+  baseUrl?: string; // only for 'openai-compatible'
+  maxTokens?: number;
+  timeout?: number;
+}
+
 // === Widget Config Types ===
 
 import type { SessionVisibilitySettings } from './widgetConfigs';
