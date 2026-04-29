@@ -41,6 +41,14 @@ const HARDCODED_GEMINI_MODELS = [
   { label: 'Gemini 2.5 Pro', value: 'gemini-2.5-pro' },
 ];
 
+const RECOMMENDED_OLLAMA_MODELS = [
+  { label: 'gemma3:12b — Google, good all-rounder (8GB VRAM)', value: 'gemma3:12b' },
+  { label: 'gemma3:27b — Google, higher quality (16GB+ VRAM)', value: 'gemma3:27b' },
+  { label: 'llama3.1:8b — Meta, solid general purpose', value: 'llama3.1:8b' },
+  { label: 'qwen2.5:7b — strong reasoning for size', value: 'qwen2.5:7b' },
+  { label: 'phi-4:14b — Microsoft, good at structured output', value: 'phi-4:14b' },
+];
+
 /** Gemini keys start with AIza and are 39 chars */
 function isValidGeminiKey(key: string): boolean {
   return /^AIza[A-Za-z0-9_-]{35}$/.test(key);
@@ -90,6 +98,11 @@ function loadVerifiedState(provider: string): TestResult {
   return { status: 'idle' };
 }
 
+function defaultModelsForProvider(provider: string): ModelOption[] {
+  if (provider === 'ollama') return RECOMMENDED_OLLAMA_MODELS;
+  return HARDCODED_GEMINI_MODELS;
+}
+
 function loadCachedModels(provider: string): ModelOption[] {
   try {
     const stored = localStorage.getItem(modelsKey(provider));
@@ -98,7 +111,7 @@ function loadCachedModels(provider: string): ModelOption[] {
       if (parsed.length > 0) return parsed;
     }
   } catch { /* ignore */ }
-  return HARDCODED_GEMINI_MODELS;
+  return defaultModelsForProvider(provider);
 }
 
 function LlmSettingsTab() {
@@ -118,6 +131,7 @@ function LlmSettingsTab() {
   const [models, setModels] = useState<ModelOption[]>(() =>
     loadCachedModels(DEFAULT_LLM_CONFIG.provider)
   );
+  const [ollamaError, setOllamaError] = useState<string | null>(null);
   const [keyError, setKeyError] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'error'>('idle');
 
@@ -142,7 +156,8 @@ function LlmSettingsTab() {
 
   const resetVerification = useCallback(() => {
     setTestResult({ status: 'idle' });
-    setModels(HARDCODED_GEMINI_MODELS);
+    setModels(defaultModelsForProvider(llmConfig.provider));
+    setOllamaError(null);
     localStorage.removeItem(verifiedKey(llmConfig.provider));
     localStorage.removeItem(modelsKey(llmConfig.provider));
     setSaveStatus('idle');
@@ -156,11 +171,19 @@ function LlmSettingsTab() {
         if (patch.provider !== undefined && patch.provider !== prev.provider) {
           setTestResult(loadVerifiedState(patch.provider));
           setModels(loadCachedModels(patch.provider));
+          setOllamaError(null);
+          // For Ollama, auto-set a dummy API key
+          if (patch.provider === 'ollama') {
+            next.apiKey = 'ollama';
+          } else if (prev.provider === 'ollama') {
+            // Switching away from Ollama — clear the dummy key
+            next.apiKey = '';
+          }
         }
         // If key changed (within same provider), reset that provider's verification
-        if (patch.apiKey !== undefined && patch.apiKey !== prev.apiKey) {
+        if (patch.apiKey !== undefined && patch.apiKey !== prev.apiKey && patch.provider !== 'ollama') {
           setTestResult({ status: 'idle' });
-          setModels(HARDCODED_GEMINI_MODELS);
+          setModels(defaultModelsForProvider(next.provider));
           localStorage.removeItem(verifiedKey(next.provider));
           localStorage.removeItem(modelsKey(next.provider));
         }
@@ -189,76 +212,6 @@ function LlmSettingsTab() {
     },
     [llmConfig.provider]
   );
-
-  // ─── Test Connection ────────────────────────────────────────────────
-
-  const handleVerify = useCallback(async () => {
-    if (!llmConfig.apiKey) {
-      setTestResult({ status: 'error', message: 'Please enter your API key' });
-      return;
-    }
-    if (
-      llmConfig.provider === 'gemini' &&
-      !isValidGeminiKey(llmConfig.apiKey)
-    ) {
-      setTestResult({
-        status: 'error',
-        message:
-          "API key format doesn't look right — Gemini keys start with AIza",
-      });
-      return;
-    }
-
-    setTestResult({ status: 'testing' });
-
-    try {
-      const token = await window.electronAPI?.getServiceToken?.();
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-      if (token) headers['Authorization'] = `Bearer ${token}`;
-
-      const res = await fetch('http://localhost:8878/api/config/test-llm', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          provider: llmConfig.provider,
-          api_key: llmConfig.apiKey,
-          model: llmConfig.model,
-          base_url: llmConfig.baseUrl,
-        }),
-      });
-
-      const data = await res.json();
-
-      if (res.ok && data.status === 'ok') {
-        setTestResult({
-          status: 'success',
-          message: `Connected! Model: ${data.model} ✓`,
-          responseMs: data.response_ms,
-        });
-        // Fetch dynamic model list on success
-        fetchModels(token);
-      } else if (res.status === 401 || res.status === 403) {
-        setTestResult({
-          status: 'error',
-          message:
-            'API key was rejected — check that it\'s correct and has Generative Language API enabled',
-        });
-      } else {
-        setTestResult({
-          status: 'error',
-          message: data.error || `Verification failed (HTTP ${res.status})`,
-        });
-      }
-    } catch {
-      setTestResult({
-        status: 'error',
-        message:
-          "Couldn't reach the coaching service — is it running?",
-      });
-    }
-  }, [llmConfig]);
 
   // ─── Fetch Models ───────────────────────────────────────────────────
 
@@ -293,10 +246,133 @@ function LlmSettingsTab() {
     }
   }, [llmConfig.apiKey, llmConfig.provider]);
 
+  // ─── Test Connection ────────────────────────────────────────────────
+
+  const handleVerify = useCallback(async () => {
+    const isOllama = llmConfig.provider === 'ollama';
+
+    if (!isOllama && !llmConfig.apiKey) {
+      setTestResult({ status: 'error', message: 'Please enter your API key' });
+      return;
+    }
+    if (
+      llmConfig.provider === 'gemini' &&
+      !isValidGeminiKey(llmConfig.apiKey)
+    ) {
+      setTestResult({
+        status: 'error',
+        message:
+          "API key format doesn't look right — Gemini keys start with AIza",
+      });
+      return;
+    }
+
+    setTestResult({ status: 'testing' });
+    setOllamaError(null);
+
+    try {
+      const token = await window.electronAPI?.getServiceToken?.();
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      // For Ollama, first fetch models to check connectivity
+      if (isOllama) {
+        const modelsRes = await fetch('http://localhost:8878/api/config/models', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            provider: 'ollama',
+            api_key: 'ollama',
+          }),
+        });
+        const modelsData = await modelsRes.json();
+
+        if (!modelsRes.ok) {
+          const hint = modelsData.hint || '';
+          setOllamaError(modelsData.error || 'Ollama is not reachable');
+          setTestResult({
+            status: 'error',
+            message: `Ollama not reachable — ${hint || 'is it running?'}`,
+          });
+          return;
+        }
+
+        if (modelsData.models && modelsData.models.length > 0) {
+          setModels(
+            modelsData.models.map((m: { id: string; name: string }) => ({
+              label: m.name,
+              value: m.id,
+            }))
+          );
+          // Auto-select first model if current selection isn't in the list
+          const modelIds = modelsData.models.map((m: { id: string }) => m.id);
+          if (!modelIds.includes(llmConfig.model)) {
+            updateConfig({ model: modelsData.models[0].id });
+          }
+        } else {
+          setOllamaError(modelsData.warning || 'No models installed');
+          setTestResult({
+            status: 'error',
+            message: 'No models installed — run: ollama pull gemma3:12b',
+          });
+          return;
+        }
+      }
+
+      // Test the actual LLM call
+      const res = await fetch('http://localhost:8878/api/config/test-llm', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          provider: llmConfig.provider,
+          api_key: isOllama ? 'ollama' : llmConfig.apiKey,
+          model: llmConfig.model,
+          base_url: llmConfig.baseUrl,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (res.ok && data.status === 'ok') {
+        setTestResult({
+          status: 'success',
+          message: isOllama
+            ? `Ollama connected! Model: ${data.model} ✓`
+            : `Connected! Model: ${data.model} ✓`,
+          responseMs: data.response_ms,
+        });
+        // Fetch dynamic model list on success (non-Ollama — we already fetched above)
+        if (!isOllama) fetchModels(token);
+      } else if (res.status === 401 || res.status === 403) {
+        setTestResult({
+          status: 'error',
+          message:
+            'API key was rejected — check that it\'s correct and has Generative Language API enabled',
+        });
+      } else {
+        setTestResult({
+          status: 'error',
+          message: data.error || `Verification failed (HTTP ${res.status})`,
+        });
+      }
+    } catch {
+      setTestResult({
+        status: 'error',
+        message: isOllama
+          ? "Couldn't reach the coaching service — is it running?"
+          : "Couldn't reach the coaching service — is it running?",
+      });
+    }
+  }, [llmConfig, updateConfig, fetchModels]);
+
+  // ─── Test Connection ────────────────────────────────────────────────
+
   // ─── Save Config ────────────────────────────────────────────────────
 
   const handleSave = useCallback(async () => {
-    if (!llmConfig.apiKey) {
+    if (!llmConfig.apiKey && llmConfig.provider !== 'ollama') {
       setSaveStatus('error');
       return;
     }
@@ -313,7 +389,7 @@ function LlmSettingsTab() {
         headers,
         body: JSON.stringify({
           provider: llmConfig.provider,
-          api_key: llmConfig.apiKey,
+          api_key: llmConfig.provider === 'ollama' ? 'ollama' : llmConfig.apiKey,
           model: llmConfig.model,
           base_url: llmConfig.baseUrl,
           max_tokens: llmConfig.maxTokens,
@@ -350,20 +426,50 @@ function LlmSettingsTab() {
         />
       </SettingsSection>
 
-      <SettingsSection title="API Key">
+      <SettingsSection title={llmConfig.provider === 'ollama' ? 'Local Setup' : 'API Key'}>
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <div className="max-w-[70%]">
-              <h4 className="text-md font-medium text-slate-300">API Key</h4>
+              <h4 className="text-md font-medium text-slate-300">
+                {llmConfig.provider === 'ollama' ? 'Ollama (Local)' : 'API Key'}
+              </h4>
               <p className="text-sm text-slate-500 mt-1">
                 {llmConfig.provider === 'gemini'
                   ? 'Get a free key from Google AI Studio (aistudio.google.com)'
                   : llmConfig.provider === 'ollama'
-                    ? 'No API key needed for local Ollama'
+                    ? 'Runs entirely on your machine \u2014 no API key, no cloud, no cost'
                     : 'Your API key for the selected provider'}
               </p>
             </div>
           </div>
+
+          {llmConfig.provider === 'ollama' && (
+            <div className="rounded-md bg-slate-700/50 border border-slate-600 p-3 space-y-2">
+              <p className="text-sm text-slate-300">
+                <strong>Setup:</strong> Install{' '}
+                <a
+                  href="https://ollama.com"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-400 hover:text-blue-300 underline"
+                >
+                  Ollama
+                </a>
+                , then pull a model:
+              </p>
+              <code className="block text-sm text-green-400 bg-slate-800 rounded px-2 py-1 font-mono">
+                ollama pull gemma3:12b
+              </code>
+              <p className="text-xs text-slate-500">
+                Recommended: gemma3:12b (8GB VRAM) or llama3.1:8b. Coaching prompts are small \u2014 even 7B models work well.
+              </p>
+              {ollamaError && (
+                <p className="text-sm text-amber-400">
+                  \u26a0\ufe0f {ollamaError}
+                </p>
+              )}
+            </div>
+          )}
 
           {llmConfig.provider !== 'ollama' && (
             <div className="flex gap-2 items-center">
@@ -455,9 +561,13 @@ function LlmSettingsTab() {
           <SettingSelectRow
             title="Model"
             description={
-              testResult.status === 'success'
-                ? 'Models loaded from your API key'
-                : 'Verify your key to load available models'
+              llmConfig.provider === 'ollama'
+                ? (testResult.status === 'success'
+                    ? 'Locally installed models from Ollama'
+                    : 'Click Verify to detect installed models')
+                : (testResult.status === 'success'
+                    ? 'Models loaded from your API key'
+                    : 'Verify your key to load available models')
             }
             value={llmConfig.model}
             options={models}
@@ -495,7 +605,10 @@ function LlmSettingsTab() {
         <button
           type="button"
           onClick={handleSave}
-          disabled={!llmConfig.apiKey && llmConfig.provider !== 'ollama'}
+          disabled={
+            (!llmConfig.apiKey && llmConfig.provider !== 'ollama') ||
+            (llmConfig.provider !== 'ollama' && testResult.status !== 'success')
+          }
           className="px-4 py-2 rounded-md text-sm font-medium bg-green-600 hover:bg-green-500 text-white transition-colors disabled:bg-slate-600 disabled:text-slate-400"
         >
           Save LLM Config
@@ -511,14 +624,24 @@ function LlmSettingsTab() {
       </div>
 
       <div className="text-sm text-slate-500 px-1 pt-2">
-        <p>
-          Your API key is stored locally on this machine and only sent to
-          the coaching service at{' '}
-          <code className="text-slate-400 bg-slate-700 px-1 rounded">
-            localhost:8878
-          </code>
-          .
-        </p>
+        {llmConfig.provider === 'ollama' ? (
+          <p>
+            All inference runs locally on your machine via Ollama at{' '}
+            <code className="text-slate-400 bg-slate-700 px-1 rounded">
+              localhost:11434
+            </code>
+            . No data leaves your computer.
+          </p>
+        ) : (
+          <p>
+            Your API key is stored locally on this machine and only sent to
+            the coaching service at{' '}
+            <code className="text-slate-400 bg-slate-700 px-1 rounded">
+              localhost:8878
+            </code>
+            .
+          </p>
+        )}
       </div>
     </>
   );
