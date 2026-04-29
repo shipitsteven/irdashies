@@ -427,12 +427,18 @@ function LlmSettingsTab() {
                     testResult.status === 'testing' ||
                     (!llmConfig.apiKey && llmConfig.provider !== 'ollama')
                   }
-                  className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                  className={`px-4 py-2 rounded-md text-sm font-medium transition-colors inline-flex items-center gap-2 ${
                     testResult.status === 'testing'
                       ? 'bg-slate-600 text-slate-400 cursor-wait'
                       : 'bg-blue-600 hover:bg-blue-500 text-white'
                   }`}
                 >
+                  {testResult.status === 'testing' && (
+                    <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                  )}
                   {testResult.status === 'testing' ? 'Verifying...' : 'Verify'}
                 </button>
 
