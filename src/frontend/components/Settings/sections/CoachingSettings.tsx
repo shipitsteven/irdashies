@@ -73,6 +73,34 @@ interface TestResult {
 
 // ─── LLM Settings Tab Component ─────────────────────────────────────────────
 
+// ─── Per-provider localStorage helpers ──────────────────────────────────────
+
+function verifiedKey(provider: string): string {
+  return `quietEyeLlmVerified_${provider}`;
+}
+function modelsKey(provider: string): string {
+  return `quietEyeLlmModels_${provider}`;
+}
+
+function loadVerifiedState(provider: string): TestResult {
+  try {
+    const stored = localStorage.getItem(verifiedKey(provider));
+    if (stored) return JSON.parse(stored) as TestResult;
+  } catch { /* ignore */ }
+  return { status: 'idle' };
+}
+
+function loadCachedModels(provider: string): ModelOption[] {
+  try {
+    const stored = localStorage.getItem(modelsKey(provider));
+    if (stored) {
+      const parsed = JSON.parse(stored) as ModelOption[];
+      if (parsed.length > 0) return parsed;
+    }
+  } catch { /* ignore */ }
+  return HARDCODED_GEMINI_MODELS;
+}
+
 function LlmSettingsTab() {
   // Load persisted LLM config from localStorage
   const [llmConfig, setLlmConfig] = useState<LlmConfig>(() => {
@@ -84,25 +112,12 @@ function LlmSettingsTab() {
   });
 
   const [showKey, setShowKey] = useState(false);
-  const [testResult, setTestResult] = useState<TestResult>(() => {
-    // Restore verified state from localStorage
-    try {
-      const stored = localStorage.getItem('quietEyeLlmVerified');
-      if (stored) return JSON.parse(stored) as TestResult;
-    } catch { /* ignore */ }
-    return { status: 'idle' };
-  });
-  const [models, setModels] = useState<ModelOption[]>(() => {
-    // Restore cached models from localStorage
-    try {
-      const stored = localStorage.getItem('quietEyeLlmModels');
-      if (stored) {
-        const parsed = JSON.parse(stored) as ModelOption[];
-        if (parsed.length > 0) return parsed;
-      }
-    } catch { /* ignore */ }
-    return HARDCODED_GEMINI_MODELS;
-  });
+  const [testResult, setTestResult] = useState<TestResult>(() =>
+    loadVerifiedState(DEFAULT_LLM_CONFIG.provider)
+  );
+  const [models, setModels] = useState<ModelOption[]>(() =>
+    loadCachedModels(DEFAULT_LLM_CONFIG.provider)
+  );
   const [keyError, setKeyError] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'error'>('idle');
 
@@ -113,38 +128,44 @@ function LlmSettingsTab() {
     localStorage.setItem('quietEyeLlmConfig', JSON.stringify(llmConfig));
   }, [llmConfig]);
 
-  // Persist verified state + models to localStorage
+  // Persist verified state + models per provider
   useEffect(() => {
     if (testResult.status === 'success') {
-      localStorage.setItem('quietEyeLlmVerified', JSON.stringify(testResult));
+      localStorage.setItem(verifiedKey(llmConfig.provider), JSON.stringify(testResult));
     }
-  }, [testResult]);
+  }, [testResult, llmConfig.provider]);
   useEffect(() => {
     if (models !== HARDCODED_GEMINI_MODELS) {
-      localStorage.setItem('quietEyeLlmModels', JSON.stringify(models));
+      localStorage.setItem(modelsKey(llmConfig.provider), JSON.stringify(models));
     }
-  }, [models]);
+  }, [models, llmConfig.provider]);
 
   const resetVerification = useCallback(() => {
     setTestResult({ status: 'idle' });
     setModels(HARDCODED_GEMINI_MODELS);
-    localStorage.removeItem('quietEyeLlmVerified');
-    localStorage.removeItem('quietEyeLlmModels');
+    localStorage.removeItem(verifiedKey(llmConfig.provider));
+    localStorage.removeItem(modelsKey(llmConfig.provider));
     setSaveStatus('idle');
-  }, []);
+  }, [llmConfig.provider]);
 
   const updateConfig = useCallback(
     (patch: Partial<LlmConfig>) => {
       setLlmConfig((prev) => {
-        // If provider or key changed, reset verification
-        if (patch.provider !== undefined || patch.apiKey !== undefined) {
+        const next = { ...prev, ...patch };
+        // If provider changed, load that provider's cached state
+        if (patch.provider !== undefined && patch.provider !== prev.provider) {
+          setTestResult(loadVerifiedState(patch.provider));
+          setModels(loadCachedModels(patch.provider));
+        }
+        // If key changed (within same provider), reset that provider's verification
+        if (patch.apiKey !== undefined && patch.apiKey !== prev.apiKey) {
           setTestResult({ status: 'idle' });
           setModels(HARDCODED_GEMINI_MODELS);
-          localStorage.removeItem('quietEyeLlmVerified');
-          localStorage.removeItem('quietEyeLlmModels');
+          localStorage.removeItem(verifiedKey(next.provider));
+          localStorage.removeItem(modelsKey(next.provider));
         }
         setSaveStatus('idle');
-        return { ...prev, ...patch };
+        return next;
       });
     },
     []
@@ -325,7 +346,6 @@ function LlmSettingsTab() {
           options={PROVIDER_OPTIONS}
           onChange={(v) => {
             updateConfig({ provider: v as LlmProvider });
-            setModels(HARDCODED_GEMINI_MODELS);
           }}
         />
       </SettingsSection>
