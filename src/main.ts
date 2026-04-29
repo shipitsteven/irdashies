@@ -100,8 +100,10 @@ app.on('ready', async () => {
 
   // Quiet Eye coaching bridge — non-critical, guarded
   const quietEyeServiceUrl = 'http://localhost:8878';
+  const coachingWidget = dashboard?.widgets.find((w) => w.id === 'coaching');
+  const coachingEnabled = coachingWidget?.enabled ?? false;
   try {
-    if (bridge) {
+    if (bridge && coachingEnabled) {
       // Initialize generic telemetry event system
       const telemetryEvents = setupTelemetryEvents(bridge, {
         resolveTrackId: (session) => resolveTrackIdViaService(session, quietEyeServiceUrl, (sections) => {
