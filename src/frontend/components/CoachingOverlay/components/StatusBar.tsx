@@ -6,57 +6,116 @@ interface StatusBarProps {
   notificationCount: number;
 }
 
-type StatusState = 'ready' | 'processing' | 'degraded' | 'disconnected' | 'loading';
+// ─── State Machine ──────────────────────────────────────────────────────────
+//
+//  ┌─────────────┐    service found     ┌──────────┐
+//  │ disconnected │───────────────────►  │ loading  │
+//  └─────────────┘                       └──────────┘
+//         ▲                                   │
+//         │ service lost              track loaded / llm known
+//         │                                   │
+//         │                  ┌────────────────┼────────────────┐
+//         │                  ▼                ▼                ▼
+//         │            ┌──────────┐    ┌───────────┐    ┌──────────┐
+//         ├────────────│  ready   │    │  degraded  │    │  ready   │
+//         │            └──────────┘    └───────────┘    └──────────┘
+//         │                  │                │                │
+//         │                  ▼                ▼                ▼
+//         │            ┌──────────────────────────────────────────┐
+//         └────────────│            processing                    │
+//                      └──────────────────────────────────────────┘
+//
+// Inputs (from ServiceStatus):
+//   connected       → boolean
+//   processing      → boolean
+//   trackLoaded     → string | null
+//   llmAvailable    → true | false | null (null = unknown, no call yet)
+//   activeFallback  → string | null
+//   lastError       → string | null
 
-function resolveState(status: ServiceStatus): {
+type StatusState =
+  | 'disconnected'
+  | 'loading'
+  | 'ready'
+  | 'processing'
+  | 'degraded';
+
+interface ResolvedStatus {
   state: StatusState;
   label: string;
   dotClass: string;
-} {
-  if (!status.connected) {
-    return {
+}
+
+// Transition table — pure function of ServiceStatus → visual state.
+// Priority order: disconnected > processing > degraded > loading > ready.
+// Each row is a guard → output. First match wins.
+const TRANSITIONS: Array<{
+  guard: (s: ServiceStatus) => boolean;
+  output: (s: ServiceStatus) => ResolvedStatus;
+}> = [
+  {
+    guard: (s) => !s.connected,
+    output: () => ({
       state: 'disconnected',
       label: 'Service offline',
       dotClass: 'bg-red-500',
-    };
-  }
-
-  if (status.processing) {
-    return {
+    }),
+  },
+  {
+    guard: (s) => s.processing,
+    output: () => ({
       state: 'processing',
       label: 'Thinking...',
       dotClass: 'bg-amber-400 animate-pulse',
-    };
-  }
-
-  // Degraded states — only show if we actually know LLM is unavailable (not null/unknown)
-  if (status.activeFallback || status.llmAvailable === false) {
-    const reason = status.activeFallback === 'no_alien'
-      ? 'no alien data'
-      : status.llmAvailable === false
-        ? 'LLM unavailable'
-        : status.activeFallback || 'limited mode';
-    return {
+    }),
+  },
+  {
+    // Explicit LLM failure — only when we've actually tried and failed
+    guard: (s) => s.llmAvailable === false,
+    output: () => ({
       state: 'degraded',
-      label: `Limited — ${reason}`,
+      label: 'Limited — LLM unavailable',
       dotClass: 'bg-orange-400',
-    };
-  }
-
-  if (status.trackLoaded === null && status.connected) {
-    return {
+    }),
+  },
+  {
+    // Active fallback mode (no alien data, analysis only, etc.)
+    guard: (s) => s.activeFallback !== null && s.activeFallback !== undefined,
+    output: (s) => ({
+      state: 'degraded',
+      label: `Limited — ${s.activeFallback === 'no_alien' ? 'no alien data' : s.activeFallback}`,
+      dotClass: 'bg-orange-400',
+    }),
+  },
+  {
+    // Connected but no track yet
+    guard: (s) => s.connected && s.trackLoaded === null,
+    output: () => ({
       state: 'loading',
-      label: 'Loading track data...',
+      label: 'Waiting for track...',
       dotClass: 'bg-blue-400 animate-pulse',
-    };
-  }
+    }),
+  },
+  {
+    // Default: everything is fine (or unknown — we don't cry wolf)
+    guard: () => true,
+    output: () => ({
+      state: 'ready',
+      label: 'Ready',
+      dotClass: 'bg-green-400',
+    }),
+  },
+];
 
-  return {
-    state: 'ready',
-    label: 'Ready',
-    dotClass: 'bg-green-400',
-  };
+function resolveState(status: ServiceStatus): ResolvedStatus {
+  for (const { guard, output } of TRANSITIONS) {
+    if (guard(status)) return output(status);
+  }
+  // Unreachable — last guard is always true
+  return { state: 'ready', label: 'Ready', dotClass: 'bg-green-400' };
 }
+
+// ─── Component ──────────────────────────────────────────────────────────────
 
 export const StatusBar = ({ status, notificationCount }: StatusBarProps) => {
   const [expanded, setExpanded] = useState(false);
