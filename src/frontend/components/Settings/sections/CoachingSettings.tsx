@@ -250,6 +250,7 @@ function LlmSettingsTab() {
 
   const handleVerify = useCallback(async () => {
     const isOllama = llmConfig.provider === 'ollama';
+    let ollamaModel = '';
 
     if (!isOllama && !llmConfig.apiKey) {
       setTestResult({ status: 'error', message: 'Please enter your API key' });
@@ -309,7 +310,10 @@ function LlmSettingsTab() {
           // Auto-select first model if current selection isn't in the list
           const modelIds = modelsData.models.map((m: { id: string }) => m.id);
           if (!modelIds.includes(llmConfig.model)) {
-            updateConfig({ model: modelsData.models[0].id });
+            ollamaModel = modelsData.models[0].id;
+            updateConfig({ model: ollamaModel });
+          } else {
+            ollamaModel = llmConfig.model;
           }
         } else {
           setOllamaError(modelsData.warning || 'No models installed');
@@ -321,6 +325,9 @@ function LlmSettingsTab() {
         }
       }
 
+      // Use resolved model — React state from updateConfig() hasn't flushed yet
+      const testModel = isOllama && ollamaModel ? ollamaModel : llmConfig.model;
+
       // Test the actual LLM call
       const res = await fetch('http://localhost:8878/api/config/test-llm', {
         method: 'POST',
@@ -328,7 +335,7 @@ function LlmSettingsTab() {
         body: JSON.stringify({
           provider: llmConfig.provider,
           api_key: isOllama ? 'ollama' : llmConfig.apiKey,
-          model: llmConfig.model,
+          model: testModel,
           base_url: llmConfig.baseUrl,
         }),
       });
@@ -339,7 +346,7 @@ function LlmSettingsTab() {
         setTestResult({
           status: 'success',
           message: isOllama
-            ? `Ollama connected! Model: ${data.model} ✓`
+            ? `Ollama connected! Model: ${testModel} ✓`
             : `Connected! Model: ${data.model} ✓`,
           responseMs: data.response_ms,
         });
