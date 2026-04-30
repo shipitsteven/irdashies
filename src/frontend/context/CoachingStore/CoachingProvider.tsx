@@ -85,7 +85,7 @@ export const CoachingProvider = () => {
       unsubs.push(
         bridge.onCoachingStatus((status) => {
           // Handle both legacy format and expanded ServiceStatus
-          if ('trackLoaded' in status || 'llmAvailable' in status) {
+          if ('trackLoaded' in status || 'llmAvailable' in status || 'activeFallback' in status) {
             // Expanded ServiceStatus
             setServiceStatus(status as Partial<ServiceStatus>);
           } else {

@@ -29,11 +29,11 @@ function resolveState(status: ServiceStatus): {
     };
   }
 
-  // Degraded states
-  if (status.activeFallback || !status.llmAvailable) {
+  // Degraded states — only show if we actually know LLM is unavailable (not null/unknown)
+  if (status.activeFallback || status.llmAvailable === false) {
     const reason = status.activeFallback === 'no_alien'
       ? 'no alien data'
-      : !status.llmAvailable
+      : status.llmAvailable === false
         ? 'LLM unavailable'
         : status.activeFallback || 'limited mode';
     return {

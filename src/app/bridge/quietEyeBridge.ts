@@ -318,13 +318,14 @@ export async function setupQuietEyeBridge(
     }
 
     // Publish expanded service status to renderer
+    // NOTE: llmAvailable is NOT set from health check — backend /api/status doesn't report it.
+    // It's only updated reactively after an actual LLM call succeeds or fails.
     overlayManager.publishMessage('quietEye:serviceStatus', {
       connected: serviceAvailable,
       processing: false,
       lastError: null,
       trackLoaded: status?.track_id ?? null,
       alienLoaded: !!(status as unknown as Record<string, unknown>)?.alien_loaded,
-      llmAvailable: !!(status as unknown as Record<string, unknown>)?.llm_available,
       activeFallback: ((status as unknown as Record<string, unknown>)?.active_fallback as string) ?? null,
     });
 

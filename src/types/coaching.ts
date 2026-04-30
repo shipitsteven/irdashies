@@ -78,7 +78,7 @@ export interface ServiceStatus {
   lastError: string | null;
   trackLoaded: string | null;
   alienLoaded: boolean;
-  llmAvailable: boolean;
+  llmAvailable: boolean | null; // null = unknown (no LLM call attempted yet)
   activeFallback: string | null; // 'analysis_only' | 'no_alien' | null
 }
 

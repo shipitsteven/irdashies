@@ -77,7 +77,7 @@ export const useCoachingStore = create<CoachingState>((set) => ({
     lastError: null,
     trackLoaded: null,
     alienLoaded: false,
-    llmAvailable: false,
+    llmAvailable: null,
     activeFallback: null,
   },
   serviceConnected: false,
